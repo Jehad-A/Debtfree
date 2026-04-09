@@ -10,7 +10,7 @@
   <link rel="manifest" href="manifest.json"/>
   <link rel="apple-touch-icon" href="icons/icon-192.png"/>
   <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet"/>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
   <title>DebtFree</title>
 <style>
 :root {
@@ -505,8 +505,8 @@ function categorize(text){
 // ══ AI PDF PARSER (using Claude API) ══════════════════════════════════════════
 async function parsePDFWithAI(file){
   // Extract text from PDF using pdf.js
-  const pdfjsLib=window['pdfjs-dist/build/pdf'];
-  pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  const pdfjsLib=window.pdfjsLib;
+  pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
 
   const arrayBuffer=await file.arrayBuffer();
   const pdf=await pdfjsLib.getDocument({data:arrayBuffer}).promise;
