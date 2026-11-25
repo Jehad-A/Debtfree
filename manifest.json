@@ -1,7 +1,8 @@
 {
-  "name": "DebtFree – Budget Tracker",
+  "name": "DebtFree – Schulden- & Budgetplaner",
   "short_name": "DebtFree",
-  "description": "Persönlicher Schulden- und Budgettracker mit Sparkasse-Analyse",
+  "description": "Persönlicher Schulden- und Budgetplaner mit Sparkasse-CSV-Import. Alle Daten bleiben auf deinem Gerät.",
+  "lang": "de",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
@@ -9,17 +10,8 @@
   "theme_color": "#0a0a0f",
   "orientation": "portrait",
   "icons": [
-    {
-      "src": "icons/icon-192.png",
-      "sizes": "192x192",
-      "type": "image/png",
-      "purpose": "any maskable"
-    },
-    {
-      "src": "icons/icon-512.png",
-      "sizes": "512x512",
-      "type": "image/png",
-      "purpose": "any maskable"
-    }
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
   ]
 }
