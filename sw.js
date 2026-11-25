@@ -1,16 +1,10 @@
-// DebtFree Service Worker - Fixed for GitHub Pages subdirectory hosting
-const CACHE_NAME = 'debtfree-v4';
-
-// Derive base path dynamically so this works at any subdirectory (e.g. /debtfree/)
-const BASE = self.location.pathname.replace('sw.js', '');
-
-const ASSETS = [
-  BASE,
-  BASE + 'index.html',
-  BASE + 'manifest.json',
-  BASE + 'icons/icon-192.png',
-  BASE + 'icons/icon-512.png',
-];
+// DebtFree Service Worker
+// - Precaches the app shell (paths are relative to the SW, so it works under /<repo>/ on GitHub Pages).
+// - Page navigations are network-first, so a new deploy reaches users on the next online start;
+//   the cached copy is used when offline.
+// - Other assets: cache-first with background refresh.
+const CACHE_NAME = 'debtfree-v5';
+const ASSETS = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', event => {
   event.waitUntil(
@@ -23,34 +17,40 @@ self.addEventListener('install', event => {
 self.addEventListener('activate', event => {
   event.waitUntil(
     caches.keys()
-      .then(keys => Promise.all(
-        keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k))
-      ))
+      .then(keys => Promise.all(keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k))))
       .then(() => self.clients.claim())
   );
 });
 
+function putInCache(request, response) {
+  if (response && response.ok && (response.type === 'basic' || response.type === 'cors')) {
+    const copy = response.clone();
+    caches.open(CACHE_NAME).then(cache => cache.put(request, copy));
+  }
+  return response;
+}
+
 self.addEventListener('fetch', event => {
-  // Only handle GET requests for same-origin assets
-  if (event.request.method !== 'GET') return;
+  const req = event.request;
+  if (req.method !== 'GET') return;
+  const url = new URL(req.url);
+  const sameOrigin = url.origin === self.location.origin;
+  const isFont = /fonts\.(googleapis|gstatic)\.com$/.test(url.hostname);
+  if (!sameOrigin && !isFont) return;
+
+  if (req.mode === 'navigate') {
+    event.respondWith(
+      fetch(req)
+        .then(res => putInCache('./index.html', res))
+        .catch(() => caches.match('./index.html'))
+    );
+    return;
+  }
 
   event.respondWith(
-    caches.match(event.request).then(cached => {
-      if (cached) return cached;
-
-      return fetch(event.request).then(response => {
-        // Cache valid same-origin responses
-        if (response && response.status === 200 && response.type === 'basic') {
-          const clone = response.clone();
-          caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
-        }
-        return response;
-      }).catch(() => {
-        // Offline fallback: return index.html for navigation requests
-        if (event.request.mode === 'navigate') {
-          return caches.match(BASE + 'index.html');
-        }
-      });
+    caches.match(req).then(cached => {
+      const network = fetch(req).then(res => putInCache(req, res)).catch(() => cached);
+      return cached || network;
     })
   );
 });
