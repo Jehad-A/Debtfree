@@ -217,7 +217,7 @@ const CAT_COLORS={
   'Lebensmittel':'#ff9944','Drogerie':'#ff44aa','Tankstelle':'#44ddff','Öffis':'#3fb8ff','Parken':'#2a9fd6',
   'Restaurant':'#ff6644','Lieferservice':'#ff8a5c','Online-Shopping':'#9966ff','Bekleidung':'#b388ff',
   'Elektronik':'#7c4dff','Wohnen':'#8e7cc3','Abos':'#ff4466','Nebenkosten':'#4488ff','Telefon/Internet':'#6aa6ff',
-  'Gesundheit':'#2ee6a8','Sport':'#5ad1a0','Miete':'#6644ff','Versicherung':'#a08cff','Bargeld':'#d4b13a',
+  'Gesundheit':'#2ee6a8','Sport':'#5ad1a0','Freizeit & Urlaub':'#ff9ad5','Auto & Werkstatt':'#7fb2c9','Miete':'#6644ff','Versicherung':'#a08cff','Bargeld':'#d4b13a',
   'Schuldentilgung':'#ffb344','Sparen & Investieren':'#36c6c6','Steuern & Abgaben':'#c08a5a','PayPal':'#3b7bd6',
   'Gebühren':'#a0a0b0','Überweisung an Personen':'#c77dff','Überweisung':'#8a8aa0','Sonstiges':'#6c6c8c',
   'Einkommen':'#00e5a0','Kindergeld':'#4fd1a5','Sonstige Einnahme':'#55c9a0','Kreditauszahlung':'#e0b84a',
@@ -232,7 +232,7 @@ const EXCLUDED=new Set(['Umbuchung','Kreditauszahlung']);
 const NON_CONSUMPTION=new Set(['Schuldentilgung','Sparen & Investieren']);
 // Categories that mean "not really sorted yet" → offered in the "Zuordnen" screen.
 const REVIEW_CATS=new Set(['Sonstiges','Sonstige Einnahme','Überweisung an Personen','Überweisung']);
-const CAT_VERSION=2;   // bump when rules change so stored bookings are re-sorted once
+const CAT_VERSION=3;   // bump when rules change so stored bookings are re-sorted once
 
 // Keyword → category. Matched on word boundaries against payee + purpose + booking text.
 // Longer keywords are tried first so e.g. "amazon prime" wins over "amazon".
@@ -291,11 +291,71 @@ function wordRe(kw){
 function payeeKey(s){return String(s||'').toLowerCase().replace(/[0-9]/g,'').replace(/[^a-zäöüß&+ ]/g,' ').replace(/\s+/g,' ').trim().slice(0,40);}
 function catColor(c){return CAT_COLORS[c]||'#6c6c8c';}
 
+// ── Option B: the bank's own categories (e.g. Sparkasse "CSV – mit Kategorien") ──
+// Mapped by keyword so it works regardless of the bank's exact category names.
+// Order matters: the first match wins.
+const BANK_CAT_MAP=[
+  [/umbuchung|eigene[ns]? konto|kontoübertrag|kontouebertrag/,'Umbuchung'],
+  [/kreditauszahlung|darlehensauszahlung/,'Kreditauszahlung'],
+  [/kindergeld|familienkasse/,'Kindergeld'],
+  [/gehalt|lohn|einkommen|rente|pension/,'Einkommen'],
+  [/kredit|darlehen|tilgung|finanzierung|rate(n)?zahlung|kreditkarte/,'Schuldentilgung'],
+  [/sparen|geldanlage|anlage|invest|wertpapier|depot|bauspar|altersvorsorge/,'Sparen & Investieren'],
+  [/steuer|abgabe|behörde|behoerde|gebühren staat/,'Steuern & Abgaben'],
+  [/miete|wohnungsmiete/,'Miete'],
+  [/strom|gas|energie|heizung|wasser|nebenkosten|rundfunk/,'Nebenkosten'],
+  [/telefon|mobilfunk|handy|internet|telekommunikation/,'Telefon/Internet'],
+  [/versicherung/,'Versicherung'],
+  [/lebensmittel|supermarkt|lebenshaltung|nahrung/,'Lebensmittel'],
+  [/drogerie|körperpflege|koerperpflege|kosmetik/,'Drogerie'],
+  [/tank|kraftstoff|sprit/,'Tankstelle'],
+  [/parken|parkhaus/,'Parken'],
+  [/werkstatt|kfz|reparatur|auto|fahrzeug|tüv|tuev/,'Auto & Werkstatt'],
+  [/öpnv|oepnv|nahverkehr|bahn|bus|öffentliche/,'Öffis'],
+  [/urlaub|reise|hotel|kino|kultur|freizeit|hobby|veranstaltung|ausgehen/,'Freizeit & Urlaub'],
+  [/lieferdienst|lieferservice|essenslieferung/,'Lieferservice'],
+  [/restaurant|gastronomie|gastro|café|cafe|essen gehen|fast food/,'Restaurant'],
+  [/streaming|abo|mitgliedschaft|zeitung|zeitschrift|medien/,'Abos'],
+  [/bekleidung|kleidung|mode|schuhe/,'Bekleidung'],
+  [/elektronik|technik|computer/,'Elektronik'],
+  [/möbel|moebel|einrichtung|haushalt|baumarkt|garten|wohnen/,'Wohnen'],
+  [/online|versandhandel|shopping|einkauf/,'Online-Shopping'],
+  [/gesundheit|apotheke|arzt|medizin|pflege/,'Gesundheit'],
+  [/sport|fitness/,'Sport'],
+  [/bargeld|geldautomat/,'Bargeld'],
+  [/bankgebühr|bankgebuehr|kontoführung|kontofuehrung|entgelt|gebühr|gebuehr/,'Gebühren'],
+];
+const BANK_CAT_IGNORE=/^(sonstige[s]?|nicht kategorisiert|unkategorisiert|ohne kategorie|andere[s]?|diverse[s]?|-)?$/;
+/** Translates the bank's category into one of ours; '' when there's no usable mapping. */
+function mapBankCat(bankCat,isIncome){
+  const c=String(bankCat||'').toLowerCase().replace(/\s+/g,' ').trim();
+  if(!c||BANK_CAT_IGNORE.test(c))return '';
+  for(const [re,cat] of BANK_CAT_MAP){
+    if(!re.test(c))continue;
+    if(isIncome&&!INCOME_CATS.includes(cat))continue;       // e.g. "Versicherung" on a refund → keep looking
+    if(!isIncome&&INCOME_ONLY.includes(cat))continue;
+    return cat;
+  }
+  return '';
+}
+
 const ruleKey=(payee,isIncome)=>(isIncome?'in:':'out:')+payeeKey(payee);
 /** Order: your own learned rules → booking type → keywords → heuristics. */
-function categorize(payee,purpose,btext,isIncome){
+function categorize(payee,purpose,btext,isIncome,bankCat){
   const rule=S.rules[ruleKey(payee,isIncome)];
   if(rule)return rule;
+  const own=categorizeOwn(payee,purpose,btext,isIncome);
+  // Our detection of own transfers, loan payouts and booking types is precise → keep it.
+  // Otherwise the bank's category wins, because the bank sees more detail (merchant codes).
+  const strong=['Umbuchung','Kreditauszahlung','Kindergeld','Einkommen','Schuldentilgung','Bargeld','Gebühren'];
+  if(strong.includes(own))return own;
+  const bank=mapBankCat(bankCat,isIncome);
+  if(bank)return bank;
+  const raw=String(bankCat||'').trim();
+  if((own==='Sonstiges'||own==='Sonstige Einnahme')&&raw&&!BANK_CAT_IGNORE.test(raw.toLowerCase()))return raw;
+  return own;
+}
+function categorizeOwn(payee,purpose,btext,isIncome){
   const bt=String(btext||'').toLowerCase().replace(/\s+/g,' ');
   const p=String(payee||'').toLowerCase();
   const all=(p+' '+purpose+' '+bt).toLowerCase();
@@ -316,7 +376,7 @@ function categorize(payee,purpose,btext,isIncome){
 function recategorizeAll(){
   for(const t of S.transactions){
     if(t.src!=='import'||t.catManual)continue;
-    t.category=categorize(t.description,t.purpose,t.btext,t.type==='einnahme');
+    t.category=categorize(t.description,t.purpose,t.btext,t.type==='einnahme',t.bankCat);
   }
   S.catVersion=CAT_VERSION;
 }
@@ -387,7 +447,7 @@ function normalizeTx(t){
   const type=t.type==='einnahme'?'einnahme':'ausgabe';
   return {id:String(t.id??uid()),date:/^\d{4}-\d{2}-\d{2}$/.test(t.date)?t.date:todayISO(),
     description:String(t.description||'Buchung'),purpose:String(t.purpose||''),category:String(t.category||'Sonstiges'),
-    amount,type,src:t.src==='import'?'import':'manual',btext:String(t.btext||''),catManual:!!t.catManual};
+    amount,type,src:t.src==='import'?'import':'manual',btext:String(t.btext||''),bankCat:String(t.bankCat||''),catManual:!!t.catManual};
 }
 function hydrate(raw){
   const s=freshState();
@@ -539,7 +599,11 @@ function parseBankCSV(text){
   const col={
     date:findCol(heads,['buchungstag','buchungsdatum','buchung','datum','valutadatum','wertstellung']),
     amount:findCol(heads,['betrag','betrageur','betragineur','umsatz']),
-    payee:findCol(heads,['beguenstigterzahlungspflichtiger','auftraggeberbeguenstigter','auftraggeberempfaenger','zahlungsempfaengerin','zahlungsempfaenger','empfaenger','beguenstigter','auftraggeber','name']),
+    payee:findCol(heads,['beguenstigterzahlungspflichtiger','auftraggeberbeguenstigter','auftraggeberempfaenger','empfaengerauftraggeber','zahlungspflichtigerbeguenstigter','namezahlungsbeteiligter','zahlungsbeteiligter','gegenpartei','zahlungsempfaengerin','zahlungsempfaenger','empfaenger','beguenstigter','auftraggeber','name']),
+    payer:findCol(heads,['zahlungspflichtiger','zahlungspflichtigerin','zahlungspflichtige','auftraggeberin']),
+    payeeTo:findCol(heads,['zahlungsempfaengerin','zahlungsempfaenger','empfaengerin']),
+    cat:findCol(heads,['unterkategorie','kategorie','hauptkategorie','category','umsatzkategorie']),
+    cat2:findCol(heads,['hauptkategorie','kategorie','category']),
     purpose:findCol(heads,['verwendungszweck','buchungsdetails']),
     btext:findCol(heads,['buchungstext','umsatzart','vorgang']),
     info:findCol(heads,['info']),
@@ -552,29 +616,45 @@ function parseBankCSV(text){
     const amt=parseAmount(r[col.amount]||'');
     if(!date||isNaN(amt)||amt===0){skipped++;continue;}
     if(col.info>=0&&/vorgemerkt|nicht ausgef/i.test(r[col.info]||'')){skipped++;continue;} // pending bookings
-    const payee=(col.payee>=0?r[col.payee]:'')||'';
+    // Some exports have separate payer / recipient columns: use the other party of each booking.
+    const split=col.payer>=0&&col.payeeTo>=0&&col.payer!==col.payeeTo;
+    const payee=(split?(amt>0?r[col.payer]:r[col.payeeTo]):(col.payee>=0?r[col.payee]:''))||'';
     const purpose=((col.purpose>=0?r[col.purpose]:'')||'').replace(/\s+/g,' ');
     const btext=(col.btext>=0?r[col.btext]:'')||'';
+    // Bank category: prefer the sub-category, fall back to the main one if the sub-category maps to nothing
+    const bc1=col.cat>=0?(r[col.cat]||''):'', bc2=col.cat2>=0&&col.cat2!==col.cat?(r[col.cat2]||''):'';
+    const bankCat=(mapBankCat(bc1,amt>0)||!bc2?bc1:bc2).slice(0,50);
     const isIncome=amt>0;
     const description=(payee||btext||purpose||'Buchung').replace(/\s+/g,' ').slice(0,70);
-    out.push({id:uid(),date,description,purpose:purpose.slice(0,140),btext:btext.replace(/\s+/g,' ').slice(0,40),amount:Math.abs(round2(amt)),
-      type:isIncome?'einnahme':'ausgabe',category:categorize(payee||description,purpose,btext,isIncome),src:'import',catManual:false});
+    out.push({id:uid(),date,description,purpose:purpose.slice(0,140),btext:btext.replace(/\s+/g,' ').slice(0,40),bankCat,amount:Math.abs(round2(amt)),
+      type:isIncome?'einnahme':'ausgabe',category:categorize(payee||description,purpose,btext,isIncome,bankCat),src:'import',catManual:false});
   }
   if(!out.length)throw new Error('Keine Buchungen gefunden. Ist der gewählte Zeitraum leer?');
-  return {txs:out,skipped};
+  return {txs:out,skipped,hasBankCats:col.cat>=0};
 }
 
 /** Adds imported rows, skipping ones already present (same date, amount, payee, purpose). Identical
  *  rows inside one file are kept as separate bookings via an occurrence counter. */
 function mergeImported(txs){
   const key=t=>[t.date,t.type,t.amount.toFixed(2),payeeKey(t.description),payeeKey(t.purpose).slice(0,30)].join('|');
-  const have={},existing={};
-  for(const t of S.transactions)if(t.src==='import'){const k=key(t);have[k]=(have[k]||0)+1;(existing[k]??=[]).push(t);}
+  const loose=t=>[t.date,t.type,t.amount.toFixed(2)].join('|');
+  const firstWord=t=>payeeKey(t.description).split(' ')[0]||'';
+  const have={},existing={},byLoose={};
+  for(const t of S.transactions)if(t.src==='import'){
+    const k=key(t);have[k]=(have[k]||0)+1;(existing[k]??=[]).push(t);(byLoose[loose(t)]??=[]).push(t);
+  }
+  const used=new Set();
+  const fill=(e,t)=>{used.add(e);if(!e.btext)e.btext=t.btext;if(t.bankCat)e.bankCat=t.bankCat;};   // details older imports lacked
   const seen={};const add=[];
   for(const t of txs){
     const k=key(t);seen[k]=(seen[k]||0)+1;
-    if(seen[k]>(have[k]||0))add.push(t);
-    else{const e=existing[k][seen[k]-1];if(e&&!e.btext)e.btext=t.btext;}   // older imports lacked the booking type
+    if(seen[k]<=(have[k]||0)){fill(existing[k][seen[k]-1],t);continue;}
+    // Same booking from a different export format (CAMT vs. "mit Kategorien") may spell payee or
+    // reference differently: match on date + amount + type + first word of the payee.
+    const fw=firstWord(t);
+    const twin=(byLoose[loose(t)]||[]).find(e=>!used.has(e)&&(firstWord(e)===fw||!fw||!firstWord(e)||payeeKey(e.description).includes(fw)||payeeKey(t.description).includes(firstWord(e))));
+    if(twin&&key(twin)!==k){fill(twin,t);continue;}
+    add.push(t);
   }
   S.transactions=[...add,...S.transactions];
   sortTx(S.transactions);
@@ -587,12 +667,12 @@ async function importFile(file){
   U.loading=true;U.importMsg=null;S.tab='analytics';render();
   try{
     const text=decodeBytes(await file.arrayBuffer());
-    const {txs,skipped}=parseBankCSV(text);
+    const {txs,skipped,hasBankCats}=parseBankCSV(text);
     const {added,dupes}=mergeImported(txs);
     recategorizeAll();
     save();
     const dates=txs.map(t=>t.date).sort();
-    U.importMsg={type:'g',text:`Datei gelesen: ${txs.length} Buchungen vom ${fmtDate(dates[0])} bis ${fmtDate(dates[dates.length-1])}. ${added} neu importiert${dupes?`, ${dupes} bereits vorhanden`:''}${skipped?`, ${skipped} Zeilen übersprungen`:''}.`};
+    U.importMsg={type:'g',text:`Datei gelesen: ${txs.length} Buchungen vom ${fmtDate(dates[0])} bis ${fmtDate(dates[dates.length-1])}. ${added} neu importiert${dupes?`, ${dupes} bereits vorhanden`:''}${skipped?`, ${skipped} Zeilen übersprungen`:''}.${hasBankCats?' Kategorien der Bank wurden übernommen.':''}`};
     toast(`${added} Buchungen importiert`);
   }catch(e){
     U.importMsg={type:'r',text:e.message||'Datei konnte nicht gelesen werden.'};
@@ -1177,7 +1257,7 @@ function renderModal(){
     inner=`<div class="mtitle">${t?'Buchung bearbeiten':'Neue Buchung'}</div>
       <div class="seg" role="group" aria-label="Art"><button class="${m.ttype==='ausgabe'?'on':''}" data-act="ttype" data-id="ausgabe">Ausgabe</button><button class="${m.ttype==='einnahme'?'on':''}" data-act="ttype" data-id="einnahme">Einnahme</button></div>
       ${field('f-desc','Beschreibung',v.description,`placeholder="z. B. Rewe" maxlength="70" ${t?'':'autofocus'}`)}
-      ${t&&t.purpose?`<div class="note" style="margin:-6px 2px 12px">${esc(t.purpose)}</div>`:''}
+      ${t&&(t.purpose||t.btext||t.bankCat)?`<div class="note" style="margin:-6px 2px 12px">${[t.btext,t.purpose].filter(Boolean).map(esc).join(' · ')}${t.bankCat?`<br>Kategorie der Bank: <b>${esc(t.bankCat)}</b>`:''}</div>`:''}
       <div class="grid2"><div>${field('f-amt','Betrag (€)',v.amount===''?'':fmtNum(v.amount),'inputmode="decimal" placeholder="12,50"')}</div>
         <div>${field('f-date','Datum',v.date,'type="date"')}</div></div>
       <label class="lbl" for="f-cat">Kategorie</label>
