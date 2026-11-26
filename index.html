@@ -232,7 +232,7 @@ const EXCLUDED=new Set(['Umbuchung','Kreditauszahlung']);
 const NON_CONSUMPTION=new Set(['Schuldentilgung','Sparen & Investieren']);
 // Categories that mean "not really sorted yet" → offered in the "Zuordnen" screen.
 const REVIEW_CATS=new Set(['Sonstiges','Sonstige Einnahme','Überweisung an Personen','Überweisung']);
-const CAT_VERSION=3;   // bump when rules change so stored bookings are re-sorted once
+const CAT_VERSION=4;   // bump when rules change so stored bookings are re-sorted once
 
 // Keyword → category. Matched on word boundaries against payee + purpose + booking text.
 // Longer keywords are tried first so e.g. "amazon prime" wins over "amazon".
@@ -368,6 +368,8 @@ function categorizeOwn(payee,purpose,btext,isIncome){
     return 'Sonstige Einnahme';
   }
   for(const [re,cat] of BTEXT_RULES)if(re.test(bt))return cat;
+  // "Miete …, Kaltmiete 940 + 350 Nebenkosten" is rent, even though "Nebenkosten" is the longer keyword
+  if(/(^|[^a-zäöüß])((kalt|warm|wohnungs)?miete|mietzahlung)([^a-zäöüß]|$)/i.test(purpose))return 'Miete';
   for(const {re,cat} of KW_LIST){if(re.test(all))return cat;}
   if(/berweisung|dauerauftrag/.test(bt)&&looksLikePerson(payee))return 'Überweisung an Personen';
   return 'Sonstiges';
@@ -430,7 +432,8 @@ function durationText(m){if(m<12)return `${m} ${m===1?'Monat':'Monate'}`;const y
 // ── State ────────────────────────────────────────────────────────────────────
 function freshState(){
   return {v:4,tab:'dashboard',income:0,strategy:'avalanche',debts:[],
-    expenses:DEFAULT_EXPENSES.map(e=>({...e,id:uid()})),transactions:[],rules:{},onboarded:false};
+    expenses:DEFAULT_EXPENSES.map(e=>({...e,id:uid()})),transactions:[],rules:{},onboarded:false,
+    catBudgets:{},ignoredContracts:{},balance:null};
 }
 let S=freshState();
 // UI-only state (never persisted)
@@ -453,7 +456,7 @@ function hydrate(raw){
   const s=freshState();
   if(!raw||typeof raw!=='object')return s;
   if(Array.isArray(raw.debts))s.debts=raw.debts.map(normalizeDebt);
-  if(Array.isArray(raw.expenses))s.expenses=raw.expenses.map(e=>({id:String(e.id??uid()),name:String(e.name||'Ausgabe'),amount:Math.max(0,parseNum(e.amount)||0),icon:String(e.icon||'📦')}));
+  if(Array.isArray(raw.expenses))s.expenses=raw.expenses.map(e=>({id:String(e.id??uid()),name:String(e.name||'Ausgabe'),amount:Math.max(0,parseNum(e.amount)||0),icon:String(e.icon||'📦'),...(e.contract?{contract:String(e.contract)}:{})}));
   if(Array.isArray(raw.transactions))s.transactions=raw.transactions.map(normalizeTx);
   if(raw.rules&&typeof raw.rules==='object')s.rules={...raw.rules};
   s.income=Math.max(0,parseNum(raw.income)||0);
@@ -461,6 +464,9 @@ function hydrate(raw){
   if(['dashboard','plan','budget','transactions','analytics'].includes(raw.tab))s.tab=raw.tab;
   s.onboarded=!!raw.onboarded;
   s.catVersion=+raw.catVersion||0;
+  if(raw.catBudgets&&typeof raw.catBudgets==='object')for(const [k,v] of Object.entries(raw.catBudgets)){const n=parseNum(v);if(n>0)s.catBudgets[k]=n;}
+  if(raw.ignoredContracts&&typeof raw.ignoredContracts==='object')s.ignoredContracts={...raw.ignoredContracts};
+  if(raw.balance&&parseNum(raw.balance.amount)===parseNum(raw.balance.amount)&&/^\d{4}-\d{2}-\d{2}$/.test(raw.balance.date))s.balance={amount:parseNum(raw.balance.amount),date:raw.balance.date};
   sortTx(s.transactions);
   return s;
 }
@@ -672,7 +678,9 @@ async function importFile(file){
     recategorizeAll();
     save();
     const dates=txs.map(t=>t.date).sort();
-    U.importMsg={type:'g',text:`Datei gelesen: ${txs.length} Buchungen vom ${fmtDate(dates[0])} bis ${fmtDate(dates[dates.length-1])}. ${added} neu importiert${dupes?`, ${dupes} bereits vorhanden`:''}${skipped?`, ${skipped} Zeilen übersprungen`:''}.${hasBankCats?' Kategorien der Bank wurden übernommen.':''}`};
+    const ageDays=Math.round((Date.now()-new Date(dates[dates.length-1]+'T12:00').getTime())/864e5);
+    const stale=ageDays>45?` ⚠️ Achtung: Die neueste Buchung in dieser Datei ist ${ageDays} Tage alt („${file.name}“). Hast du vielleicht eine alte Datei gewählt? Exportiere die Umsätze neu und wähle die neueste Datei.`:'';
+    U.importMsg={type:stale?'a':'g',text:`Datei gelesen: ${txs.length} Buchungen vom ${fmtDate(dates[0])} bis ${fmtDate(dates[dates.length-1])}. ${added} neu importiert${dupes?`, ${dupes} bereits vorhanden`:''}${skipped?`, ${skipped} Zeilen übersprungen`:''}.${hasBankCats?' Kategorien der Bank wurden übernommen.':''}${stale}`};
     toast(`${added} Buchungen importiert`);
   }catch(e){
     U.importMsg={type:'r',text:e.message||'Datei konnte nicht gelesen werden.'};
@@ -746,12 +754,125 @@ function buildInsights(a,f){
     else ins.push({type:'good',ico:'✅',title:'Ausgaben im Rahmen',
       body:`Ø ${fmt(a.avgOut)} pro Monat – innerhalb deines geplanten Budgets von ${fmt(f.totalExp)}.`});
   }
+  const overB=catStats().list.filter(c=>c.budget&&c.now>c.budget);
+  if(overB.length)ins.push({type:'warn',ico:'🎯',title:'Budget überschritten',
+    body:overB.map(c=>`${c.name}: ${fmt(c.now)} von ${fmt(c.budget)}`).join(' · ')});
   if(S.income>0&&a.avgIn>0&&a.nMonths>=2&&Math.abs(a.avgIn-S.income)/S.income>0.1){
     ins.push({type:'info',ico:'💶',title:'Einkommen weicht ab',
       body:`Die Einnahmen im Auszug liegen bei Ø ${fmt(a.avgIn)}/Monat, im Budget stehen ${fmt(S.income)}. Prüfe den Wert im Budget.`});
   }
   return ins;
 }
+
+// ── Contracts & subscriptions (recurring payment detection) ──────────────────
+const CADENCES=[
+  {n:'monatlich',d:30.44,min:24,max:38},{n:'alle 2 Monate',d:60.9,min:52,max:70},
+  {n:'vierteljährlich',d:91.3,min:78,max:105},{n:'halbjährlich',d:182.6,min:160,max:205},{n:'jährlich',d:365.25,min:335,max:395}];
+const dayNum=iso=>Math.round(Date.UTC(+iso.slice(0,4),+iso.slice(5,7)-1,+iso.slice(8,10))/864e5);
+const isoFromDay=n=>new Date(n*864e5).toISOString().slice(0,10);
+const median=a=>{const x=[...a].sort((p,q)=>p-q),m=x.length>>1;return x.length?(x.length%2?x[m]:(x[m-1]+x[m])/2):0;};
+const monthEnd=ym=>{const [y,m]=ym.split('-').map(Number);return isoFromDay(dayNum(`${ym}-01`)+new Date(Date.UTC(y,m,0)).getUTCDate()-1);};
+/** Checks whether bookings (one payee, sorted by date) form a regular series with a stable amount. */
+function detectStream(txs,maxCv=0.25){
+  if(txs.length<2)return null;
+  const days=txs.map(t=>dayNum(t.date));
+  const gaps=[];for(let i=1;i<days.length;i++)gaps.push(days[i]-days[i-1]);
+  const cad=CADENCES.find(c=>{const g=median(gaps);return g>=c.min&&g<=c.max;});
+  if(!cad)return null;
+  if(txs.length<(cad.d<40?3:2))return null;
+  const fit=gaps.filter(g=>g>=cad.min&&g<=cad.max*2.1).length/gaps.length;   // tolerate one skipped period
+  if(fit<0.75)return null;
+  const amts=txs.map(t=>t.amount),mean=sum(amts)/amts.length;
+  const cv=Math.sqrt(sum(amts,a=>(a-mean)**2)/amts.length)/(mean||1);
+  if(cv>maxCv)return null;
+  const amount=median(amts.slice(-3));
+  const last=txs[txs.length-1].date;
+  return {cadence:cad,amount,variable:cv>0.03,monthly:amount*30.44/cad.d,last,next:isoFromDay(dayNum(last)+Math.round(cad.d)),count:txs.length,day:+last.slice(8,10)};
+}
+const NOT_CONTRACT=new Set(['Umbuchung','Kreditauszahlung','Bargeld']);
+let recurringCache={key:'',out:{}};
+/** Recurring series per direction ('ausgabe' = contracts & subscriptions, 'einnahme' = salary etc.). */
+function detectRecurring(type){
+  const ck=S.transactions.length+'|'+(S.transactions[0]?.id||'')+'|'+Object.keys(S.rules).length+'|'+Object.keys(S.ignoredContracts).length;
+  if(recurringCache.key!==ck)recurringCache={key:ck,out:{}};
+  if(recurringCache.out[type])return recurringCache.out[type];
+  const end=S.transactions[0]?.date;const groups={};
+  // Grouped by payee + category, so e.g. an employer's expense refunds don't disturb the salary series
+  for(const t of S.transactions)if(t.type===type&&!NOT_CONTRACT.has(t.category))(groups[payeeKey(t.description)+'#'+t.category]??=[]).push(t);
+  const out=[];
+  for(const [k,arr] of Object.entries(groups)){
+    arr.sort((a,b)=>a.date.localeCompare(b.date));
+    // Income (salary) varies more – e.g. a month with sick pay – so allow more spread there
+    const found=[];const whole=detectStream(arr,type==='einnahme'?0.5:0.25);
+    if(whole)found.push({...whole,txs:arr,sub:''});
+    else{   // same payee, several contracts (e.g. two insurance policies) → split by amount
+      const byAmt={};for(const t of arr)(byAmt[t.amount.toFixed(2)]??=[]).push(t);
+      for(const [a,sub] of Object.entries(byAmt)){const st=detectStream(sub);if(st)found.push({...st,txs:sub,sub:a});}
+    }
+    for(const fd of found){
+      const id=type+'|'+k.split('#')[0]+(fd.sub?'|'+fd.sub:'');
+      if(S.ignoredContracts[id])continue;
+      const lt=fd.txs[fd.txs.length-1];
+      out.push({id,name:lt.description,category:lt.category,type,
+        active:dayNum(end)-dayNum(fd.last)<=fd.cadence.d*1.5+7,...fd,ids:new Set(fd.txs.map(t=>t.id))});
+    }
+  }
+  out.sort((a,b)=>b.monthly-a.monthly);
+  recurringCache.out[type]=out;
+  return out;
+}
+
+// ── Month-end forecast ───────────────────────────────────────────────────────
+function forecast(){
+  if(!S.transactions.length)return null;
+  const today=todayISO(),M=today.slice(0,7),end=monthEnd(M);
+  const latest=S.transactions[0].date;
+  if(dayNum(today)-dayNum(latest)>10)return {stale:true,latest};
+  const inM=S.transactions.filter(t=>t.date.startsWith(M)&&!EXCLUDED.has(t.category));
+  const received=sum(inM.filter(t=>t.type==='einnahme'),t=>t.amount);
+  const spent=sum(inM.filter(t=>t.type==='ausgabe'),t=>t.amount);
+  // Series not yet booked this month but due before month end
+  const due=c=>c.active&&c.last<M+'-01'&&c.next<=end&&dayNum(c.next)>=dayNum(M+'-01')-10;
+  const inc=detectRecurring('einnahme').filter(due);
+  const out=detectRecurring('ausgabe').filter(due);
+  // Everyday spending not covered by contracts: daily average of the last 3 full months
+  const from=monthsBack(M,3)+'-01',to=monthsBack(M,1);
+  const contractIds=new Set(detectRecurring('ausgabe').flatMap(c=>[...c.ids]));
+  const varTx=S.transactions.filter(t=>t.type==='ausgabe'&&t.date>=from&&t.date.slice(0,7)<=to&&!EXCLUDED.has(t.category)&&!NON_CONSUMPTION.has(t.category)&&!contractIds.has(t.id));
+  const daysBase=Math.max(1,dayNum(monthEnd(to))-dayNum(from)+1);
+  const daily=sum(varTx,t=>t.amount)/daysBase;
+  const startRest=Math.max(dayNum(today),dayNum(latest));
+  const restDays=Math.max(0,dayNum(end)-startRest);
+  const variable=daily*restDays;
+  const pendingIn=sum(inc,c=>c.amount),pendingOut=sum(out,c=>c.amount);
+  const result=received+pendingIn-spent-pendingOut-variable;
+  let endBalance=null;
+  if(S.balance&&dayNum(today)-dayNum(S.balance.date)<=3){
+    const bd=dayNum(S.balance.date);
+    const pi=sum(inc.filter(c=>dayNum(c.next)>=bd),c=>c.amount),po=sum(out.filter(c=>dayNum(c.next)>=bd),c=>c.amount);
+    endBalance=S.balance.amount+pi-po-daily*Math.max(0,dayNum(end)-bd);
+  }
+  return {M,received,spent,inc,out,pendingIn,pendingOut,variable,daily,restDays,result,endBalance,latest};
+}
+
+// ── Category budgets (per month) ─────────────────────────────────────────────
+function budgetMonth(){
+  const M=todayISO().slice(0,7);
+  return S.transactions.some(t=>t.date.startsWith(M))?M:(S.transactions[0]?.date.slice(0,7)||M);
+}
+function catStats(){
+  const M=budgetMonth();const from=monthsBack(M,3);
+  const stats={};
+  for(const t of S.transactions){
+    if(t.type!=='ausgabe'||EXCLUDED.has(t.category)||NON_CONSUMPTION.has(t.category))continue;
+    const m=t.date.slice(0,7);const c=(stats[t.category]??={name:t.category,now:0,prev:0});
+    if(m===M)c.now+=t.amount;else if(m>=from&&m<M)c.prev+=t.amount;
+  }
+  const nPrev=Math.max(1,new Set(S.transactions.filter(t=>{const m=t.date.slice(0,7);return m>=from&&m<M;}).map(t=>t.date.slice(0,7))).size);
+  return {M,list:Object.values(stats).map(c=>({...c,avg:c.prev/nPrev,budget:S.catBudgets[c.name]||0})).sort((a,b)=>b.avg-a.avg||b.now-a.now)};
+}
+// Fixed costs are better handled as contracts; suggestions focus on everyday spending.
+const FIXED_CATS=new Set(['Sonstiges','Miete','Nebenkosten','Versicherung','Telefon/Internet','Steuern & Abgaben','Gebühren','Überweisung an Personen']);
 
 // ── Charts (SVG, crisp on every screen) ───────────────────────────────────────
 function donutSVG(cats,total){
@@ -1016,10 +1137,90 @@ function renderDash(f){
       <div class="scard"><div class="scard-lbl">Schuldenfrei in</div><div class="scard-val num">${durationText(f.sim.months)}</div><div class="scard-hint">${monthsFromNow(f.sim.months)}</div></div>
       <div class="scard"><div class="scard-lbl">Zinsen bis dahin</div><div class="scard-val num warnc">${fmt(f.sim.interest)}</div><div class="scard-hint">${S.strategy==='avalanche'?'Lawine (höchste Zinsen zuerst)':'Schneeball (kleinste zuerst)'}</div></div>
     </div>`:''}
+    ${forecastCard()}
+    ${budgetMini()}
     <div class="stitle"><span>Deine Schulden</span></div>
     ${S.debts.map(d=>debtCard(d,f)).join('')}
     ${recent.length?`<div class="stitle"><span>Letzte Buchungen</span><button class="chipbtn" data-act="tab" data-id="transactions">Alle</button></div>${recent.map(txRow).join('')}`:''}
   `;
+}
+
+function forecastCard(){
+  const fc=forecast();
+  if(!fc)return '';
+  if(fc.stale)return `<div class="card"><b>🔮 Prognose Monatsende</b><div class="note" style="margin-top:6px">Deine neueste Buchung ist vom ${fmtDate(fc.latest)}. Importiere aktuelle Umsätze, dann berechnet die App, was am Monatsende übrig bleibt.</div>
+    <button class="chipbtn on" style="margin-top:10px" data-act="importCsv">📥 Umsätze importieren</button></div>`;
+  const row=(l,v,cls='')=>`<div class="bi"><span>${l}</span><span class="num ${cls}">${v}</span></div>`;
+  const names=arr=>arr.slice(0,3).map(c=>esc(c.name.slice(0,18))).join(', ')+(arr.length>3?` +${arr.length-3}`:'');
+  const balOld=S.balance&&!(fc.endBalance!=null);
+  return `<div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:baseline"><b>🔮 Prognose ${monthLabel(fc.M)}</b><span class="note">noch ${fc.restDays} Tage</span></div>
+    ${fc.endBalance!=null
+      ?`<div style="margin:10px 0 6px"><span class="note">Kontostand am Monatsende ≈</span><div class="scard-val num ${fc.endBalance>=0?'pos':'neg'}" style="font-size:28px">${fmt(fc.endBalance)}</div><div class="note">Monatsbilanz (Ein − Aus): <span class="num ${fc.result>=0?'pos':'neg'}">${fmt(fc.result)}</span></div></div>`
+      :`<div style="margin:10px 0 6px"><span class="note">Monatsbilanz voraussichtlich (Einnahmen − Ausgaben)</span><div class="scard-val num ${fc.result>=0?'pos':'neg'}" style="font-size:28px">${fmt(fc.result)}</div>
+        ${fc.result<0?'<div class="note">Enthält auch einmalige Zahlungen (z. B. Kredit-Ablösungen). Gib unten deinen Kontostand ein, um zu sehen, was am Monatsende wirklich auf dem Konto ist.</div>':''}</div>`}
+    ${row('Eingegangen','+'+fmt(fc.received),'pos')}
+    ${fc.inc.length?row('Noch erwartet: '+names(fc.inc),'+'+fmt(fc.pendingIn),'pos'):''}
+    ${row('Bereits ausgegeben','−'+fmt(fc.spent),'neg')}
+    ${fc.out.length?row('Noch fällig: '+names(fc.out),'−'+fmt(fc.pendingOut),'neg'):''}
+    ${row(`Alltag (Ø ${fmt(fc.daily)}/Tag)`,'−'+fmt(fc.variable),'neg')}
+    <div class="bi total"><label for="bal">Kontostand heute <span class="note">(optional)</span></label>
+      <div class="aedit"><input id="bal" class="einput" inputmode="decimal" placeholder="z. B. 850" value="${S.balance&&!balOld?esc(fmtNum(S.balance.amount)):''}" data-change="balance" aria-label="Kontostand heute"/><span class="esign">€</span></div></div>
+    ${fc.endBalance!=null?'':`<div class="note">${balOld?'Kontostand ist älter als 3 Tage – bitte aktualisieren. ':''}Mit deinem heutigen Kontostand zeigt die App, wie viel am Monatsende auf dem Konto ist.</div>`}
+  </div>`;
+}
+function budgetMini(){
+  const {M,list}=catStats();
+  const b=list.filter(c=>c.budget>0);
+  if(!b.length)return '';
+  const over=b.filter(c=>c.now>c.budget);
+  return `<div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:baseline"><b>🎯 Budgets ${monthLabel(M)}</b><button class="chipbtn" data-act="tab" data-id="budget">Bearbeiten</button></div>
+    ${over.length?`<div class="alert r" style="margin:10px 0 4px">Überschritten: ${over.map(c=>`${esc(c.name)} (+${fmt(c.now-c.budget)})`).join(', ')}</div>`:''}
+    ${b.slice(0,6).map(budgetBar).join('')}
+  </div>`;
+}
+function budgetBar(c){
+  const pct=c.budget?Math.min(100,c.now/c.budget*100):0;
+  const col=c.now>c.budget?'var(--red)':pct>80?'var(--amber)':'var(--green)';
+  return `<div class="bar-item" style="margin-top:10px"><div class="bar-label"><span>${esc(c.name)}</span><span class="num mut">${fmt(c.now)} / ${fmt(c.budget)}</span></div>
+    <div class="bar-track"><div class="bar-fill" style="width:${pct}%;background:${col}"></div></div></div>`;
+}
+function contractsSection(){
+  const all=detectRecurring('ausgabe');
+  const act=all.filter(c=>c.active);
+  if(!S.transactions.length)return '';
+  const total=sum(act,c=>c.monthly);
+  const shown=U.showAllContracts?act:act.slice(0,8);
+  const linked=new Set(S.expenses.map(e=>e.contract).filter(Boolean));
+  return `<div class="stitle"><span>Verträge & Abos (erkannt)</span><span class="num" style="letter-spacing:0">${fmt(total)}/Mo.</span></div>
+    ${act.length?`<div class="note" style="margin:-4px 4px 10px">Automatisch aus wiederkehrenden Abbuchungen erkannt · ${act.length} aktiv${all.length>act.length?` · ${all.length-act.length} beendet`:''}</div>
+    ${shown.map(c=>`<div class="li">
+      <span class="li-dot" style="background:${catColor(c.category)}"></span>
+      <div class="li-main"><div class="li-t">${esc(c.name)}</div>
+        <div class="li-s">${c.cadence.n} · ${esc(c.category)} · nächste ≈ ${fmtDate(c.next)}</div></div>
+      <div style="text-align:right"><div class="li-amt num">${c.variable?'≈ ':''}${fmt2(c.amount)}</div>${c.cadence.d>40?`<div class="li-s num">${fmt(c.monthly)}/Mo.</div>`:''}</div>
+      <div style="display:flex;flex-direction:column;gap:4px;margin-left:4px">
+        ${linked.has(c.id)?'<span class="chip" title="Im Fixkosten-Budget">✓</span>':`<button class="chipbtn" style="padding:3px 9px" data-act="contractToBudget" data-id="${esc(c.id)}" aria-label="${esc(c.name)} zu Fixkosten">＋</button>`}
+        <button class="chipbtn" style="padding:3px 9px" data-act="ignoreContract" data-id="${esc(c.id)}" aria-label="${esc(c.name)} ausblenden">✕</button>
+      </div></div>`).join('')}
+    ${act.length>8?`<button class="btn-g" data-act="toggleContracts">${U.showAllContracts?'Weniger anzeigen':`Alle ${act.length} anzeigen`}</button>`:''}
+    <div class="note" style="margin:8px 4px 0">＋ übernimmt den Vertrag in deine Fixkosten · ✕ blendet ihn aus (kein Vertrag). Tipp: Prüfe jedes Jahr, welche Abos und Tarife du noch brauchst.</div>`
+    :'<div class="note" style="margin:0 4px">Noch keine wiederkehrenden Zahlungen erkannt – dafür braucht die App mindestens 3 Monate Umsätze.</div>'}`;
+}
+function catBudgetSection(){
+  const {M,list}=catStats();
+  if(!list.length)return '';
+  return `<div class="stitle"><span>Kategorie-Budgets · ${monthLabel(M)}</span><button class="chipbtn" data-act="suggestBudgets">Vorschlag</button></div>
+    <div class="note" style="margin:-4px 4px 10px">Monatliches Limit pro Kategorie. „Vorschlag“ setzt Alltags-Kategorien auf ihren Durchschnitt der letzten 3 Monate − 10 %.</div>
+    ${list.slice(0,14).map(c=>`<div class="card" style="padding:12px 14px;margin-bottom:8px">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span class="li-dot" style="background:${catColor(c.name)}"></span>
+        <div class="li-main"><div class="li-t">${esc(c.name)}</div><div class="li-s">Ø ${fmt(c.avg)}/Mo. · dieser Monat ${fmt(c.now)}</div></div>
+        <div class="aedit"><input class="einput" style="width:64px" inputmode="decimal" placeholder="–" value="${c.budget?esc(fmtNum(c.budget)):''}" data-change="catBudget" data-id="${esc(c.name)}" aria-label="Budget ${esc(c.name)}"/><span class="esign">€</span></div>
+      </div>
+      ${c.budget?budgetBar(c):''}
+    </div>`).join('')}`;
 }
 
 function renderPlan(f){
@@ -1106,6 +1307,8 @@ function renderBudget(f){
         <div class="aedit"><input class="einput" inputmode="decimal" value="${esc(fmtNum(e.amount))}" data-change="expAmount" data-id="${esc(e.id)}" aria-label="Betrag ${esc(e.name)}"/><span class="esign">€</span></div>
       </div>`).join(''):'<div class="empty-s" style="text-align:center;padding:16px">Noch keine Fixkosten erfasst.</div>'}
     <div class="note" style="text-align:center;margin-top:10px">Beträge ändern → Tilgungsplan aktualisiert sich sofort.<br>Kreditraten gehören nicht hierher – die stecken in den Schulden.</div>
+    ${contractsSection()}
+    ${catBudgetSection()}
   `;
 }
 
@@ -1465,6 +1668,19 @@ const ACT={
   clearMonth:()=>{U.txMonth='';render();},
   clearCat:()=>{U.txCat='';render();},
   review:()=>openModal({type:'review'}),
+  toggleContracts:()=>{U.showAllContracts=!U.showAllContracts;render();},
+  ignoreContract:id=>{S.ignoredContracts[id]=1;save();render();toast('Ausgeblendet','ok',()=>{delete S.ignoredContracts[id];save();render();});},
+  contractToBudget:id=>{
+    const c=detectRecurring('ausgabe').find(x=>x.id===id);if(!c)return;
+    const icon={Versicherung:'🛡️',Miete:'🏠',Nebenkosten:'⚡','Telefon/Internet':'📱',Abos:'🎬',Schuldentilgung:'💳',Sport:'🏋️'}[c.category]||'📦';
+    S.expenses.push({id:uid(),name:c.name.slice(0,30),amount:round2(c.monthly),icon,contract:c.id});
+    save();render();toast(`${c.name.slice(0,24)} → Fixkosten (${fmt(c.monthly)}/Mo.)`);
+  },
+  suggestBudgets:()=>{
+    const {list}=catStats();let n=0;
+    for(const c of list){if(FIXED_CATS.has(c.name)||c.avg<20)continue;S.catBudgets[c.name]=Math.max(10,Math.ceil(c.avg*0.9/10)*10);n++;}
+    save();render();toast(n?`${n} Budgets vorgeschlagen – anpassbar`:'Zu wenig Daten für Vorschläge',n?'ok':'err');
+  },
   importCsv:()=>$('file-csv').click(),
   exportCsv:()=>{
     if(!S.transactions.length){toast('Keine Buchungen vorhanden','err');return;}
@@ -1498,6 +1714,17 @@ document.addEventListener('change',e=>{
   if(k==='income'){const v=parseNum(el.value);if(v>=0){S.income=round2(v);save();}render();}
   else if(k==='expAmount'){const v=parseNum(el.value);if(v>=0){S.expenses=S.expenses.map(x=>x.id===el.dataset.id?{...x,amount:round2(v)}:x);save();}else toast('Ungültiger Betrag','err');render();}
   else if(k==='txCat'){U.txCat=el.value;U.txLimit=400;$('tx-list').innerHTML=txListHTML();}
+  else if(k==='catBudget'){
+    const v=el.value.trim()===''?0:parseNum(el.value);
+    if(v>=0){if(v>0)S.catBudgets[el.dataset.id]=round2(v);else delete S.catBudgets[el.dataset.id];save();}else toast('Ungültiger Betrag','err');
+    render();
+  }
+  else if(k==='balance'){
+    const v=el.value.trim()===''?null:parseNum(el.value);
+    if(v===null){S.balance=null;save();render();}
+    else if(!isNaN(v)){S.balance={amount:round2(v),date:todayISO()};save();render();}
+    else toast('Ungültiger Betrag','err');
+  }
   else if(k==='reviewCat'){
     const [type,pk]=el.dataset.id.split('|');
     const t=S.transactions.find(x=>x.type===type&&payeeKey(x.description)===pk);
