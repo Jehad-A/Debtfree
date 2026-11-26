@@ -335,7 +335,7 @@ function freshState(){
 }
 let S=freshState();
 // UI-only state (never persisted)
-const U={modal:null,txQuery:'',txCat:'',txLimit:150,anaRange:'all',whatIf:0,loading:false,importMsg:null,unlocked:false};
+const U={modal:null,txQuery:'',txCat:'',txLimit:400,anaRange:'all',whatIf:0,loading:false,importMsg:null,unlocked:false};
 
 function normalizeDebt(d){
   const balance=Math.max(0,parseNum(d.balance)||0);
@@ -442,9 +442,16 @@ function parseCSV(text,sep){
   for(let i=0;i<text.length;i++){
     const c=text[i];
     if(q){
-      if(c==='"'){if(text[i+1]==='"'){cur+='"';i++;}else q=false;}
-      else cur+=c;
-    }else if(c==='"')q=true;
+      if(c==='"'){
+        const n=text[i+1];
+        if(n==='"'){cur+='"';i++;}
+        // Banks don't always escape quotes inside a field (e.g. Firma "XY" GmbH). Only treat a quote
+        // as closing when a separator or line break follows; otherwise keep it as text. Without this a
+        // single stray quote swallows every following line of the file.
+        else if(n===undefined||n===sep||n==='\n'||n==='\r')q=false;
+        else cur+='"';
+      }else cur+=c;
+    }else if(c==='"'&&!cur.trim()){q=true;cur='';}
     else if(c===sep){row.push(cur);cur='';}
     else if(c==='\n'||c==='\r'){
       if(c==='\r'&&text[i+1]==='\n')i++;
@@ -539,7 +546,8 @@ async function importFile(file){
     const {txs,skipped}=parseBankCSV(text);
     const {added,dupes}=mergeImported(txs);
     save();
-    U.importMsg={type:'g',text:`${added} neue Buchungen importiert${dupes?`, ${dupes} bereits vorhanden`:''}${skipped?`, ${skipped} Zeilen übersprungen`:''}.`};
+    const dates=txs.map(t=>t.date).sort();
+    U.importMsg={type:'g',text:`Datei gelesen: ${txs.length} Buchungen vom ${fmtDate(dates[0])} bis ${fmtDate(dates[dates.length-1])}. ${added} neu importiert${dupes?`, ${dupes} bereits vorhanden`:''}${skipped?`, ${skipped} Zeilen übersprungen`:''}.`};
     toast(`${added} Buchungen importiert`);
   }catch(e){
     U.importMsg={type:'r',text:e.message||'Datei konnte nicht gelesen werden.'};
@@ -953,8 +961,8 @@ function txListHTML(){
   if(!S.transactions.length)return `<div class="empty"><div class="empty-ico">💸</div><div class="empty-t">Noch keine Buchungen</div>
     <div class="empty-s">Importiere deinen Kontoauszug als CSV oder tippe auf ＋, um eine Buchung manuell zu erfassen.</div></div>`;
   if(!list.length)return '<div class="empty"><div class="empty-s">Keine Treffer.</div></div>';
-  let html='',cur='';
   const shown=list.slice(0,U.txLimit);
+  let html=`<div class="note" style="margin:0 4px 4px">${list.length} Buchungen · ${fmtDate(list[list.length-1].date)} – ${fmtDate(list[0].date)}</div>`,cur='';
   const monthSums={};
   for(const t of list){const m=t.date.slice(0,7);monthSums[m]??={o:0,i:0};monthSums[m][t.type==='ausgabe'?'o':'i']+=t.amount;}
   for(const t of shown){
@@ -962,7 +970,7 @@ function txListHTML(){
     if(m!==cur){cur=m;html+=`<div class="month-h"><span>${monthLabel(m)}</span><span class="num"><span class="pos">+${fmt(monthSums[m].i)}</span> · <span class="neg">−${fmt(monthSums[m].o)}</span></span></div>`;}
     html+=txRow(t);
   }
-  if(list.length>shown.length)html+=`<button class="btn-g" data-act="moreTx">Weitere ${list.length-shown.length} anzeigen</button>`;
+  if(list.length>shown.length)html+=`<button class="btn-p" data-act="moreTx">Ältere Buchungen anzeigen (${list.length-shown.length} weitere)</button>`;
   return html;
 }
 function renderTxs(){
@@ -1242,7 +1250,7 @@ const ACT={
     S.transactions=S.transactions.filter(x=>x.id!==id);save();closeModal();render();
     toast('Buchung gelöscht','ok',()=>{S.transactions.push(t);sortTx(S.transactions);save();render();});
   },
-  moreTx:()=>{U.txLimit+=300;$('tx-list').innerHTML=txListHTML();},
+  moreTx:()=>{U.txLimit+=1000;$('tx-list').innerHTML=txListHTML();},
   showCat:id=>{U.txCat=id;U.txQuery='';S.tab='transactions';render();window.scrollTo(0,0);},
   importCsv:()=>$('file-csv').click(),
   exportCsv:()=>{
@@ -1276,11 +1284,11 @@ document.addEventListener('change',e=>{
   const el=e.target;const k=el.dataset.change;if(!k)return;
   if(k==='income'){const v=parseNum(el.value);if(v>=0){S.income=round2(v);save();}render();}
   else if(k==='expAmount'){const v=parseNum(el.value);if(v>=0){S.expenses=S.expenses.map(x=>x.id===el.dataset.id?{...x,amount:round2(v)}:x);save();}else toast('Ungültiger Betrag','err');render();}
-  else if(k==='txCat'){U.txCat=el.value;U.txLimit=150;$('tx-list').innerHTML=txListHTML();}
+  else if(k==='txCat'){U.txCat=el.value;U.txLimit=400;$('tx-list').innerHTML=txListHTML();}
 });
 document.addEventListener('input',e=>{
   const el=e.target;const k=el.dataset.input;if(!k)return;
-  if(k==='txQuery'){U.txQuery=el.value;U.txLimit=150;$('tx-list').innerHTML=txListHTML();}
+  if(k==='txQuery'){U.txQuery=el.value;U.txLimit=400;$('tx-list').innerHTML=txListHTML();}
   else if(k==='whatIf'){
     U.whatIf=+el.value;const f=figures();
     const simW=U.whatIf>0?simulate(S.debts,f.budget,S.strategy,U.whatIf):null;
