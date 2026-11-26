@@ -217,14 +217,22 @@ const CAT_COLORS={
   'Lebensmittel':'#ff9944','Drogerie':'#ff44aa','Tankstelle':'#44ddff','Öffis':'#3fb8ff','Parken':'#2a9fd6',
   'Restaurant':'#ff6644','Lieferservice':'#ff8a5c','Online-Shopping':'#9966ff','Bekleidung':'#b388ff',
   'Elektronik':'#7c4dff','Wohnen':'#8e7cc3','Abos':'#ff4466','Nebenkosten':'#4488ff','Telefon/Internet':'#6aa6ff',
-  'Gesundheit':'#2ee6a8','Sport':'#5ad1a0','Miete':'#6644ff','Versicherung':'#a08cff','Bargeld':'#d4b13a',
-  'Schuldentilgung':'#ffb344','Gebühren':'#a0a0b0','Überweisung':'#8a8aa0','Sonstiges':'#6c6c8c',
-  'Einkommen':'#00e5a0','Sonstige Einnahme':'#55c9a0',
+  'Gesundheit':'#2ee6a8','Sport':'#5ad1a0','Freizeit & Urlaub':'#ff9ad5','Auto & Werkstatt':'#7fb2c9','Miete':'#6644ff','Versicherung':'#a08cff','Bargeld':'#d4b13a',
+  'Schuldentilgung':'#ffb344','Sparen & Investieren':'#36c6c6','Steuern & Abgaben':'#c08a5a','PayPal':'#3b7bd6',
+  'Gebühren':'#a0a0b0','Überweisung an Personen':'#c77dff','Überweisung':'#8a8aa0','Sonstiges':'#6c6c8c',
+  'Einkommen':'#00e5a0','Kindergeld':'#4fd1a5','Sonstige Einnahme':'#55c9a0','Kreditauszahlung':'#e0b84a',
+  'Umbuchung':'#5a5a78',
 };
-const EXPENSE_CATS=Object.keys(CAT_COLORS).filter(c=>!['Einkommen','Sonstige Einnahme'].includes(c));
-const INCOME_CATS=['Einkommen','Sonstige Einnahme'];
-// Categories that move money to debts rather than consume it — excluded from "Konsum" analytics.
-const NON_CONSUMPTION=new Set(['Schuldentilgung']);
+const INCOME_ONLY=['Einkommen','Kindergeld','Sonstige Einnahme','Kreditauszahlung'];
+const EXPENSE_CATS=Object.keys(CAT_COLORS).filter(c=>!INCOME_ONLY.includes(c));
+const INCOME_CATS=[...INCOME_ONLY,'Umbuchung'];
+// Money moved between your own accounts, or borrowed money arriving: neither income nor spending.
+const EXCLUDED=new Set(['Umbuchung','Kreditauszahlung']);
+// Outflows that are not consumption; shown separately in the analysis.
+const NON_CONSUMPTION=new Set(['Schuldentilgung','Sparen & Investieren']);
+// Categories that mean "not really sorted yet" → offered in the "Zuordnen" screen.
+const REVIEW_CATS=new Set(['Sonstiges','Sonstige Einnahme','Überweisung an Personen','Überweisung']);
+const CAT_VERSION=3;   // bump when rules change so stored bookings are re-sorted once
 
 // Keyword → category. Matched on word boundaries against payee + purpose + booking text.
 // Longer keywords are tried first so e.g. "amazon prime" wins over "amazon".
@@ -241,17 +249,31 @@ const KEYWORDS={
   'Elektronik':['saturn','media markt','mediamarkt','cyberport','notebooksbilliger','conrad'],
   'Wohnen':['ikea','obi','bauhaus','hornbach','toom','poco','jysk','xxxlutz','roller'],
   'Abos':['netflix','spotify','amazon prime','prime video','disney plus','disney+','dazn','sky deutschland','wow tv','playstation','xbox','apple.com','itunes','youtube premium','audible','chatgpt','openai','icloud'],
-  'Nebenkosten':['stadtwerke*','strom*','gas','*energie gmbh','e.on','eon energie','vattenfall','enbw','rwe','beitragsservice','rundfunkbeitrag','ard zdf','nebenkosten','wasserversorgung'],
+  'Nebenkosten':['stadtwerke*','strom*','gas','*energie gmbh','e.on','eon energie','vattenfall','enbw','rwe','beitragsservice','rundfunk*','ard zdf','nebenkosten','wasserversorgung','*abwasser*'],
   'Telefon/Internet':['telekom','vodafone','o2','telefonica','1&1','congstar','freenet','aldi talk','unitymedia','internet'],
   'Gesundheit':['*apotheke','arzt','zahnarzt','praxis','krankenhaus','*klinik','optiker','fielmann'],
   'Sport':['fitness*','mcfit','clever fit','fitx','urban sports','john reed'],
   'Miete':['*miete','mietzahlung','hausverwaltung','vonovia','wohnungsbau','wohnungsgenossenschaft'],
-  'Versicherung':['*versicherung*','allianz','huk','huk-coburg','axa','ergo','generali','debeka','devk','signal iduna','r+v','barmenia','check24 versicherung'],
+  'Versicherung':['*versicherung*','*versicherungs*','hansemerkur','hanse merkur','deurag','arag','allianz','huk','huk-coburg','axa','ergo','generali','debeka','devk','signal iduna','r+v','barmenia','check24 versicherung'],
   'Bargeld':['geldautomat','bargeldauszahlung','bargeld','auszahlung gaa','gaa'],
-  'Schuldentilgung':['kreditkarte*','*darlehen*','*tilgung','ratenkredit','kreditrate','santander','barclays','advanzia','consors finanz','targobank','kfw'],
+  'Schuldentilgung':['kreditkarte*','*darlehen*','*tilgung','ratenkredit','kreditrate','einzug rate','*annuitaet','*annuität','santander','barclays','advanzia','consors finanz','targobank','kfw','kreditanstalt für wiederaufbau','kreditanstalt fuer wiederaufbau','klarna','avarda','tf bank','ing','ing-diba','ing diba','auxmoney','smava','creditplus','bank of scotland','cofidis','ratepay','afterpay','riverty'],
+  'Sparen & Investieren':['trade republic','scalable','goldavenue','sparplan*','*depot','comdirect','consorsbank','flatex','smartbroker','bitpanda','coinbase','tagesgeld*','festgeld*','*bauspar*','wüstenrot','schwäbisch hall','raisin','weltsparen'],
+  'Steuern & Abgaben':['finanzamt','bundeskasse','stadtkasse','gemeindekasse','kreiskasse','landeshauptkasse','kfz-steuer','*steuer','bußgeld*','bussgeld*','zoll'],
+  'PayPal':['paypal'],
   'Gebühren':['*entgelt*','kontoführung*','kontofuehrung*','*gebühr*','*gebuehr*','abschluss','sollzinsen'],
 };
-const INCOME_KEYWORDS=['gehalt*','lohn','*lohn','bezüge','bezuege','rente','kindergeld','arbeitslosengeld','bundesagentur für arbeit','elterngeld','krankengeld'];
+const INCOME_KEYWORDS=['gehalt*','lohn','*lohn','bezüge','bezuege','rente','arbeitslosengeld','bundesagentur für arbeit','bundesagentur fur arbeit','bundesagentur fuer arbeit','elterngeld','krankengeld'];
+const KINDERGELD_RES=['kindergeld','familienkasse'].map(wordRe);
+// Lenders: money *from* them is a loan payout, not income.
+const LENDER_RES=['tf bank','avarda','ing','ing-diba','santander','auxmoney','smava','creditplus','targobank','bank of scotland','consors finanz','cofidis','*darlehen*','kreditauszahlung'].map(wordRe);
+const SAVINGS_RES=KEYWORDS['Sparen & Investieren'].map(wordRe);
+// Booking types (Sparkasse "Buchungstext") that already say what a booking is.
+const BTEXT_RULES=[
+  [/kreditkartenabrechn/,'Schuldentilgung'],[/rate\/annuit/,'Schuldentilgung'],
+  [/bargeldauszahlung|geldautomat/,'Bargeld'],[/entgeltabschluss|^abschluss/,'Gebühren'],
+];
+const COMPANY_RE=/\b(gmbh|ag|kg|se|sa|sarl|s\.?\s?a|s\.?c\.?a|bv|b\.v|ltd|inc|e\.?v|ug|ohg|mbh|bank|kasse|versicherung|verlag|service|services|shop|markt|holding|group|stadt|amt|bund|zentrale|online|pay|payments|card|de|com|eu|europe|international|deutschland|germany|store|club|team)\b|[0-9/*]/i;
+const looksLikePerson=name=>{const n=name.trim();const w=n.split(/\s+/);return w.length>=2&&w.length<=4&&!COMPANY_RE.test(n)&&/^[a-zäöüßéèçñ' .-]+$/i.test(n);};
 
 const KW_LIST=Object.entries(KEYWORDS)
   .flatMap(([cat,kws])=>kws.map(k=>({k,cat,re:wordRe(k)})))
@@ -269,17 +291,94 @@ function wordRe(kw){
 function payeeKey(s){return String(s||'').toLowerCase().replace(/[0-9]/g,'').replace(/[^a-zäöüß&+ ]/g,' ').replace(/\s+/g,' ').trim().slice(0,40);}
 function catColor(c){return CAT_COLORS[c]||'#6c6c8c';}
 
+// ── Option B: the bank's own categories (e.g. Sparkasse "CSV – mit Kategorien") ──
+// Mapped by keyword so it works regardless of the bank's exact category names.
+// Order matters: the first match wins.
+const BANK_CAT_MAP=[
+  [/umbuchung|eigene[ns]? konto|kontoübertrag|kontouebertrag/,'Umbuchung'],
+  [/kreditauszahlung|darlehensauszahlung/,'Kreditauszahlung'],
+  [/kindergeld|familienkasse/,'Kindergeld'],
+  [/gehalt|lohn|einkommen|rente|pension/,'Einkommen'],
+  [/kredit|darlehen|tilgung|finanzierung|rate(n)?zahlung|kreditkarte/,'Schuldentilgung'],
+  [/sparen|geldanlage|anlage|invest|wertpapier|depot|bauspar|altersvorsorge/,'Sparen & Investieren'],
+  [/steuer|abgabe|behörde|behoerde|gebühren staat/,'Steuern & Abgaben'],
+  [/miete|wohnungsmiete/,'Miete'],
+  [/strom|gas|energie|heizung|wasser|nebenkosten|rundfunk/,'Nebenkosten'],
+  [/telefon|mobilfunk|handy|internet|telekommunikation/,'Telefon/Internet'],
+  [/versicherung/,'Versicherung'],
+  [/lebensmittel|supermarkt|lebenshaltung|nahrung/,'Lebensmittel'],
+  [/drogerie|körperpflege|koerperpflege|kosmetik/,'Drogerie'],
+  [/tank|kraftstoff|sprit/,'Tankstelle'],
+  [/parken|parkhaus/,'Parken'],
+  [/werkstatt|kfz|reparatur|auto|fahrzeug|tüv|tuev/,'Auto & Werkstatt'],
+  [/öpnv|oepnv|nahverkehr|bahn|bus|öffentliche/,'Öffis'],
+  [/urlaub|reise|hotel|kino|kultur|freizeit|hobby|veranstaltung|ausgehen/,'Freizeit & Urlaub'],
+  [/lieferdienst|lieferservice|essenslieferung/,'Lieferservice'],
+  [/restaurant|gastronomie|gastro|café|cafe|essen gehen|fast food/,'Restaurant'],
+  [/streaming|abo|mitgliedschaft|zeitung|zeitschrift|medien/,'Abos'],
+  [/bekleidung|kleidung|mode|schuhe/,'Bekleidung'],
+  [/elektronik|technik|computer/,'Elektronik'],
+  [/möbel|moebel|einrichtung|haushalt|baumarkt|garten|wohnen/,'Wohnen'],
+  [/online|versandhandel|shopping|einkauf/,'Online-Shopping'],
+  [/gesundheit|apotheke|arzt|medizin|pflege/,'Gesundheit'],
+  [/sport|fitness/,'Sport'],
+  [/bargeld|geldautomat/,'Bargeld'],
+  [/bankgebühr|bankgebuehr|kontoführung|kontofuehrung|entgelt|gebühr|gebuehr/,'Gebühren'],
+];
+const BANK_CAT_IGNORE=/^(sonstige[s]?|nicht kategorisiert|unkategorisiert|ohne kategorie|andere[s]?|diverse[s]?|-)?$/;
+/** Translates the bank's category into one of ours; '' when there's no usable mapping. */
+function mapBankCat(bankCat,isIncome){
+  const c=String(bankCat||'').toLowerCase().replace(/\s+/g,' ').trim();
+  if(!c||BANK_CAT_IGNORE.test(c))return '';
+  for(const [re,cat] of BANK_CAT_MAP){
+    if(!re.test(c))continue;
+    if(isIncome&&!INCOME_CATS.includes(cat))continue;       // e.g. "Versicherung" on a refund → keep looking
+    if(!isIncome&&INCOME_ONLY.includes(cat))continue;
+    return cat;
+  }
+  return '';
+}
+
 const ruleKey=(payee,isIncome)=>(isIncome?'in:':'out:')+payeeKey(payee);
-function categorize(payee,text,isIncome){
+/** Order: your own learned rules → booking type → keywords → heuristics. */
+function categorize(payee,purpose,btext,isIncome,bankCat){
   const rule=S.rules[ruleKey(payee,isIncome)];
   if(rule)return rule;
-  const lower=(payee+' '+text).toLowerCase();
+  const own=categorizeOwn(payee,purpose,btext,isIncome);
+  // Our detection of own transfers, loan payouts and booking types is precise → keep it.
+  // Otherwise the bank's category wins, because the bank sees more detail (merchant codes).
+  const strong=['Umbuchung','Kreditauszahlung','Kindergeld','Einkommen','Schuldentilgung','Bargeld','Gebühren'];
+  if(strong.includes(own))return own;
+  const bank=mapBankCat(bankCat,isIncome);
+  if(bank)return bank;
+  const raw=String(bankCat||'').trim();
+  if((own==='Sonstiges'||own==='Sonstige Einnahme')&&raw&&!BANK_CAT_IGNORE.test(raw.toLowerCase()))return raw;
+  return own;
+}
+function categorizeOwn(payee,purpose,btext,isIncome){
+  const bt=String(btext||'').toLowerCase().replace(/\s+/g,' ');
+  const p=String(payee||'').toLowerCase();
+  const all=(p+' '+purpose+' '+bt).toLowerCase();
   if(isIncome){
-    if(INCOME_RES.some(re=>re.test(lower)))return 'Einkommen';
+    if(/bargeldeinzahlung/.test(bt))return 'Umbuchung';
+    if(KINDERGELD_RES.some(re=>re.test(all))||/(^|\s)kg\d{4,}fk/i.test(purpose))return 'Kindergeld';
+    if(/lohn|gehalt/.test(bt)||INCOME_RES.some(re=>re.test(all)))return 'Einkommen';
+    if(LENDER_RES.some(re=>re.test(p))||/auszahlung\W+(\w+\W+){0,2}\w*(kredit|darlehen)|(kredit|darlehens?)auszahlung/i.test(purpose))return 'Kreditauszahlung';
+    if(SAVINGS_RES.some(re=>re.test(p)))return 'Umbuchung';
     return 'Sonstige Einnahme';
   }
-  for(const {re,cat} of KW_LIST){if(re.test(lower))return cat;}
+  for(const [re,cat] of BTEXT_RULES)if(re.test(bt))return cat;
+  for(const {re,cat} of KW_LIST){if(re.test(all))return cat;}
+  if(/berweisung|dauerauftrag/.test(bt)&&looksLikePerson(payee))return 'Überweisung an Personen';
   return 'Sonstiges';
+}
+/** Re-sorts imported bookings with the current rules (bookings you changed by hand are kept). */
+function recategorizeAll(){
+  for(const t of S.transactions){
+    if(t.src!=='import'||t.catManual)continue;
+    t.category=categorize(t.description,t.purpose,t.btext,t.type==='einnahme',t.bankCat);
+  }
+  S.catVersion=CAT_VERSION;
 }
 
 // ── Defaults ─────────────────────────────────────────────────────────────────
@@ -335,7 +434,7 @@ function freshState(){
 }
 let S=freshState();
 // UI-only state (never persisted)
-const U={modal:null,txQuery:'',txCat:'',txLimit:400,anaRange:'all',whatIf:0,loading:false,importMsg:null,unlocked:false};
+const U={modal:null,txQuery:'',txCat:'',txMonth:'',txLimit:400,anaRange:'all',whatIf:0,loading:false,importMsg:null,unlocked:false};
 
 function normalizeDebt(d){
   const balance=Math.max(0,parseNum(d.balance)||0);
@@ -348,7 +447,7 @@ function normalizeTx(t){
   const type=t.type==='einnahme'?'einnahme':'ausgabe';
   return {id:String(t.id??uid()),date:/^\d{4}-\d{2}-\d{2}$/.test(t.date)?t.date:todayISO(),
     description:String(t.description||'Buchung'),purpose:String(t.purpose||''),category:String(t.category||'Sonstiges'),
-    amount,type,src:t.src==='import'?'import':'manual'};
+    amount,type,src:t.src==='import'?'import':'manual',btext:String(t.btext||''),bankCat:String(t.bankCat||''),catManual:!!t.catManual};
 }
 function hydrate(raw){
   const s=freshState();
@@ -361,6 +460,7 @@ function hydrate(raw){
   s.strategy=raw.strategy==='snowball'?'snowball':'avalanche';
   if(['dashboard','plan','budget','transactions','analytics'].includes(raw.tab))s.tab=raw.tab;
   s.onboarded=!!raw.onboarded;
+  s.catVersion=+raw.catVersion||0;
   sortTx(s.transactions);
   return s;
 }
@@ -499,7 +599,11 @@ function parseBankCSV(text){
   const col={
     date:findCol(heads,['buchungstag','buchungsdatum','buchung','datum','valutadatum','wertstellung']),
     amount:findCol(heads,['betrag','betrageur','betragineur','umsatz']),
-    payee:findCol(heads,['beguenstigterzahlungspflichtiger','auftraggeberbeguenstigter','auftraggeberempfaenger','zahlungsempfaengerin','zahlungsempfaenger','empfaenger','beguenstigter','auftraggeber','name']),
+    payee:findCol(heads,['beguenstigterzahlungspflichtiger','auftraggeberbeguenstigter','auftraggeberempfaenger','empfaengerauftraggeber','zahlungspflichtigerbeguenstigter','namezahlungsbeteiligter','zahlungsbeteiligter','gegenpartei','zahlungsempfaengerin','zahlungsempfaenger','empfaenger','beguenstigter','auftraggeber','name']),
+    payer:findCol(heads,['zahlungspflichtiger','zahlungspflichtigerin','zahlungspflichtige','auftraggeberin']),
+    payeeTo:findCol(heads,['zahlungsempfaengerin','zahlungsempfaenger','empfaengerin']),
+    cat:findCol(heads,['unterkategorie','kategorie','hauptkategorie','category','umsatzkategorie']),
+    cat2:findCol(heads,['hauptkategorie','kategorie','category']),
     purpose:findCol(heads,['verwendungszweck','buchungsdetails']),
     btext:findCol(heads,['buchungstext','umsatzart','vorgang']),
     info:findCol(heads,['info']),
@@ -512,26 +616,46 @@ function parseBankCSV(text){
     const amt=parseAmount(r[col.amount]||'');
     if(!date||isNaN(amt)||amt===0){skipped++;continue;}
     if(col.info>=0&&/vorgemerkt|nicht ausgef/i.test(r[col.info]||'')){skipped++;continue;} // pending bookings
-    const payee=(col.payee>=0?r[col.payee]:'')||'';
+    // Some exports have separate payer / recipient columns: use the other party of each booking.
+    const split=col.payer>=0&&col.payeeTo>=0&&col.payer!==col.payeeTo;
+    const payee=(split?(amt>0?r[col.payer]:r[col.payeeTo]):(col.payee>=0?r[col.payee]:''))||'';
     const purpose=((col.purpose>=0?r[col.purpose]:'')||'').replace(/\s+/g,' ');
     const btext=(col.btext>=0?r[col.btext]:'')||'';
+    // Bank category: prefer the sub-category, fall back to the main one if the sub-category maps to nothing
+    const bc1=col.cat>=0?(r[col.cat]||''):'', bc2=col.cat2>=0&&col.cat2!==col.cat?(r[col.cat2]||''):'';
+    const bankCat=(mapBankCat(bc1,amt>0)||!bc2?bc1:bc2).slice(0,50);
     const isIncome=amt>0;
     const description=(payee||btext||purpose||'Buchung').replace(/\s+/g,' ').slice(0,70);
-    out.push({id:uid(),date,description,purpose:purpose.slice(0,140),amount:Math.abs(round2(amt)),
-      type:isIncome?'einnahme':'ausgabe',category:categorize(payee||description,purpose+' '+btext,isIncome),src:'import'});
+    out.push({id:uid(),date,description,purpose:purpose.slice(0,140),btext:btext.replace(/\s+/g,' ').slice(0,40),bankCat,amount:Math.abs(round2(amt)),
+      type:isIncome?'einnahme':'ausgabe',category:categorize(payee||description,purpose,btext,isIncome,bankCat),src:'import',catManual:false});
   }
   if(!out.length)throw new Error('Keine Buchungen gefunden. Ist der gewählte Zeitraum leer?');
-  return {txs:out,skipped};
+  return {txs:out,skipped,hasBankCats:col.cat>=0};
 }
 
 /** Adds imported rows, skipping ones already present (same date, amount, payee, purpose). Identical
  *  rows inside one file are kept as separate bookings via an occurrence counter. */
 function mergeImported(txs){
   const key=t=>[t.date,t.type,t.amount.toFixed(2),payeeKey(t.description),payeeKey(t.purpose).slice(0,30)].join('|');
-  const have={};
-  for(const t of S.transactions)if(t.src==='import'){const k=key(t);have[k]=(have[k]||0)+1;}
+  const loose=t=>[t.date,t.type,t.amount.toFixed(2)].join('|');
+  const firstWord=t=>payeeKey(t.description).split(' ')[0]||'';
+  const have={},existing={},byLoose={};
+  for(const t of S.transactions)if(t.src==='import'){
+    const k=key(t);have[k]=(have[k]||0)+1;(existing[k]??=[]).push(t);(byLoose[loose(t)]??=[]).push(t);
+  }
+  const used=new Set();
+  const fill=(e,t)=>{used.add(e);if(!e.btext)e.btext=t.btext;if(t.bankCat)e.bankCat=t.bankCat;};   // details older imports lacked
   const seen={};const add=[];
-  for(const t of txs){const k=key(t);seen[k]=(seen[k]||0)+1;if(seen[k]>(have[k]||0))add.push(t);}
+  for(const t of txs){
+    const k=key(t);seen[k]=(seen[k]||0)+1;
+    if(seen[k]<=(have[k]||0)){fill(existing[k][seen[k]-1],t);continue;}
+    // Same booking from a different export format (CAMT vs. "mit Kategorien") may spell payee or
+    // reference differently: match on date + amount + type + first word of the payee.
+    const fw=firstWord(t);
+    const twin=(byLoose[loose(t)]||[]).find(e=>!used.has(e)&&(firstWord(e)===fw||!fw||!firstWord(e)||payeeKey(e.description).includes(fw)||payeeKey(t.description).includes(firstWord(e))));
+    if(twin&&key(twin)!==k){fill(twin,t);continue;}
+    add.push(t);
+  }
   S.transactions=[...add,...S.transactions];
   sortTx(S.transactions);
   return {added:add.length,dupes:txs.length-add.length};
@@ -543,11 +667,12 @@ async function importFile(file){
   U.loading=true;U.importMsg=null;S.tab='analytics';render();
   try{
     const text=decodeBytes(await file.arrayBuffer());
-    const {txs,skipped}=parseBankCSV(text);
+    const {txs,skipped,hasBankCats}=parseBankCSV(text);
     const {added,dupes}=mergeImported(txs);
+    recategorizeAll();
     save();
     const dates=txs.map(t=>t.date).sort();
-    U.importMsg={type:'g',text:`Datei gelesen: ${txs.length} Buchungen vom ${fmtDate(dates[0])} bis ${fmtDate(dates[dates.length-1])}. ${added} neu importiert${dupes?`, ${dupes} bereits vorhanden`:''}${skipped?`, ${skipped} Zeilen übersprungen`:''}.`};
+    U.importMsg={type:'g',text:`Datei gelesen: ${txs.length} Buchungen vom ${fmtDate(dates[0])} bis ${fmtDate(dates[dates.length-1])}. ${added} neu importiert${dupes?`, ${dupes} bereits vorhanden`:''}${skipped?`, ${skipped} Zeilen übersprungen`:''}.${hasBankCats?' Kategorien der Bank wurden übernommen.':''}`};
     toast(`${added} Buchungen importiert`);
   }catch(e){
     U.importMsg={type:'r',text:e.message||'Datei konnte nicht gelesen werden.'};
@@ -563,24 +688,35 @@ function buildAnalytics(range){
   if(!txs.length)return null;
   const lastMonth=txs[0].date.slice(0,7);
   if(range!=='all'){const from=monthsBack(lastMonth,+range-1);txs=txs.filter(t=>t.date.slice(0,7)>=from);}
-  const out=txs.filter(t=>t.type==='ausgabe');
+  const real=txs.filter(t=>!EXCLUDED.has(t.category));
+  const out=real.filter(t=>t.type==='ausgabe');
   const consum=out.filter(t=>!NON_CONSUMPTION.has(t.category));
-  const debtPay=out.filter(t=>NON_CONSUMPTION.has(t.category));
-  const inc=txs.filter(t=>t.type==='einnahme');
+  const debtPay=out.filter(t=>t.category==='Schuldentilgung');
+  const savings=out.filter(t=>t.category==='Sparen & Investieren');
+  const inc=real.filter(t=>t.type==='einnahme');
   const monthSet=new Set(txs.map(t=>t.date.slice(0,7)));
   const nMonths=Math.max(1,monthSet.size);
   const catMap={};
   for(const t of consum){(catMap[t.category]??={name:t.category,total:0,count:0,payees:new Set()});const c=catMap[t.category];c.total+=t.amount;c.count++;c.payees.add(payeeKey(t.description));}
   const cats=Object.values(catMap).sort((a,b)=>b.total-a.total);
   const monthMap={};
-  for(const m of monthSet)monthMap[m]=0;
-  for(const t of consum)monthMap[t.date.slice(0,7)]+=t.amount;
-  const months=Object.entries(monthMap).sort((a,b)=>a[0].localeCompare(b[0])).slice(-12);
+  for(const m of monthSet)monthMap[m]={c:0,d:0,s:0,i:0};
+  for(const t of real){const mm=monthMap[t.date.slice(0,7)];
+    if(t.type==='einnahme')mm.i+=t.amount;
+    else if(t.category==='Schuldentilgung')mm.d+=t.amount;
+    else if(t.category==='Sparen & Investieren')mm.s+=t.amount;
+    else mm.c+=t.amount;}
+  const months=Object.entries(monthMap).sort((a,b)=>a[0].localeCompare(b[0])).slice(-13);
   const totalOut=sum(consum,t=>t.amount);
   const totalIn=sum(inc,t=>t.amount);
   const totalDebtPay=sum(debtPay,t=>t.amount);
+  const totalSave=sum(savings,t=>t.amount);
   const avgOut=totalOut/nMonths, avgIn=totalIn/nMonths;
-  return {cats,months,totalOut,totalIn,totalDebtPay,avgOut,avgIn,nMonths,txCount:txs.length,
+  const unsorted=txs.filter(t=>REVIEW_CATS.has(t.category)&&!t.catManual);
+  return {cats,months,totalOut,totalIn,totalDebtPay,totalSave,avgOut,avgIn,nMonths,txCount:txs.length,
+    unsortedOut:sum(unsorted.filter(t=>t.type==='ausgabe'),t=>t.amount),unsortedIn:sum(unsorted.filter(t=>t.type==='einnahme'),t=>t.amount),
+    unsortedPayees:new Set(unsorted.map(t=>payeeKey(t.description))).size,
+    excludedTotal:sum(txs.filter(t=>EXCLUDED.has(t.category)),t=>t.amount),
     from:txs[txs.length-1].date,to:txs[0].date};
 }
 function buildInsights(a,f){
@@ -627,26 +763,54 @@ function donutSVG(cats,total){
     <text x="65" y="62" text-anchor="middle" fill="#9a9ab4" font-size="10">gesamt</text>
     <text x="65" y="77" text-anchor="middle" fill="#ececf4" font-size="12" font-weight="700">${esc(fmt(total))}</text></svg>`;
 }
-function barsSVG(months,budgetLine){
+// "Nice" axis step: 1, 2 or 5 × 10^n
+function niceStep(max,ticks=4){const raw=max/ticks;const p=10**Math.floor(Math.log10(raw||1));return [1,2,2.5,5,10].map(m=>m*p).find(s=>s>=raw)||p*10;}
+const kEuro=v=>v>=1000?(v/1000).toLocaleString('de-DE',{maximumFractionDigits:1})+'k':String(Math.round(v));
+/** Stacked monthly bars (consumption / repayment / saving) with income line, € axis and month/year axis.
+ *  Each month is tappable and opens its bookings. */
+function cashflowSVG(months){
   if(!months.length)return '';
-  const W=320,H=150,pb=22,pt=14;
-  const max=Math.max(...months.map(m=>m[1]),budgetLine||0)*1.12||1;
-  const bw=W/months.length;
-  const bars=months.map(([ym,v],i)=>{
-    const h=(v/max)*(H-pb-pt);const x=i*bw+bw*.18;const y=H-pb-h;
-    const over=budgetLine>0&&v>budgetLine;
-    return `<rect x="${x}" y="${y}" width="${bw*.64}" height="${Math.max(h,1)}" rx="4" fill="${over?'#ff5c78':'#00e5a0'}" opacity=".85"><title>${monthLabel(ym)}: ${fmt(v)}</title></rect>
-      <text x="${x+bw*.32}" y="${H-6}" text-anchor="middle" fill="#9a9ab4" font-size="10">${DE_MONTHS[+ym.slice(5)-1]}</text>`;
+  const W=340,H=200,pl=34,pr=6,pt=10,pb=30;
+  const top=Math.max(...months.map(([,m])=>Math.max(m.c+m.d+m.s,m.i)),1);
+  const step=niceStep(top);const max=Math.ceil(top/step)*step;
+  const y=v=>pt+(H-pt-pb)*(1-v/max);
+  const bw=(W-pl-pr)/months.length;
+  let g='';
+  for(let v=0;v<=max+0.01;v+=step)g+=`<line x1="${pl}" x2="${W-pr}" y1="${y(v)}" y2="${y(v)}" stroke="#24243a" stroke-width="1"/><text x="${pl-5}" y="${y(v)+3.5}" text-anchor="end" fill="#9a9ab4" font-size="9.5">${kEuro(v)}</text>`;
+  const bars=months.map(([ym,m],i)=>{
+    const x=pl+i*bw+bw*.16,w=bw*.68;let base=0,r='';
+    for(const [v,col] of [[m.c,'#ff5c78'],[m.d,'#ffb344'],[m.s,'#36c6c6']]){if(v>0){r+=`<rect x="${x}" y="${y(base+v)}" width="${w}" height="${y(base)-y(base+v)}" fill="${col}"/>`;base+=v;}}
+    const [yy,mo]=ym.split('-');const showYear=i===0||mo==='01';
+    return `<g data-act="showMonth" data-id="${ym}" style="cursor:pointer"><rect x="${pl+i*bw}" y="${pt}" width="${bw}" height="${H-pt-pb}" fill="transparent"/>${r}
+      <title>${monthLabel(ym)}: Einnahmen ${fmt(m.i)} · Konsum ${fmt(m.c)} · Tilgung ${fmt(m.d)} · Sparen ${fmt(m.s)}</title>
+      <text x="${x+w/2}" y="${H-pb+13}" text-anchor="middle" fill="#9a9ab4" font-size="9.5">${DE_MONTHS[+mo-1]}</text>
+      ${showYear?`<text x="${x+w/2}" y="${H-pb+25}" text-anchor="middle" fill="#ececf4" font-size="9.5" font-weight="700">${yy}</text>`:''}</g>`;
   }).join('');
-  const by=budgetLine>0?H-pb-(budgetLine/max)*(H-pb-pt):null;
-  const line=by!=null?`<line x1="0" x2="${W}" y1="${by}" y2="${by}" stroke="#ffb344" stroke-dasharray="5 4" stroke-width="1.5"/><text x="${W-2}" y="${by-4}" text-anchor="end" fill="#ffb344" font-size="10">Budget ${esc(fmt(budgetLine))}</text>`:'';
-  return `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Monatliche Ausgaben">${bars}${line}</svg>`;
+  const pts=months.map(([,m],i)=>`${(pl+i*bw+bw/2).toFixed(1)},${y(m.i).toFixed(1)}`);
+  const line=`<polyline points="${pts.join(' ')}" fill="none" stroke="#00e5a0" stroke-width="2"/>${pts.map(p=>{const [cx,cy]=p.split(',');return `<circle cx="${cx}" cy="${cy}" r="2.6" fill="#00e5a0"/>`;}).join('')}`;
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Einnahmen und Ausgaben je Monat">${g}${bars}<g pointer-events="none">${line}</g></svg>
+    <div class="chips" style="margin:8px 0 0;gap:12px;font-size:12px;color:var(--muted)">
+      <span><span class="legend-dot" style="display:inline-block;background:#00e5a0"></span> Einnahmen</span>
+      <span><span class="legend-dot" style="display:inline-block;background:#ff5c78"></span> Konsum</span>
+      <span><span class="legend-dot" style="display:inline-block;background:#ffb344"></span> Tilgung</span>
+      <span><span class="legend-dot" style="display:inline-block;background:#36c6c6"></span> Sparen</span></div>`;
 }
 function timelineSVG(series){
-  const W=320,H=120,pad=6;
-  const all=series.flatMap(s=>s.data);const max=Math.max(...all,1);const len=Math.max(...series.map(s=>s.data.length));
-  const path=d=>d.map((v,i)=>`${i?'L':'M'}${(pad+(i/Math.max(1,len-1))*(W-2*pad)).toFixed(1)},${(H-pad-(v/max)*(H-2*pad)).toFixed(1)}`).join('');
-  return `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Verlauf der Restschuld">
+  const W=340,H=150,pl=34,pr=8,pt=8,pb=22;
+  const all=series.flatMap(s=>s.data);const top=Math.max(...all,1);const len=Math.max(...series.map(s=>s.data.length));
+  const step=niceStep(top);const max=Math.ceil(top/step)*step;
+  const X=i=>pl+(i/Math.max(1,len-1))*(W-pl-pr), Y=v=>pt+(H-pt-pb)*(1-v/max);
+  let g='';
+  for(let v=0;v<=max+0.01;v+=step)g+=`<line x1="${pl}" x2="${W-pr}" y1="${Y(v)}" y2="${Y(v)}" stroke="#24243a"/><text x="${pl-5}" y="${Y(v)+3.5}" text-anchor="end" fill="#9a9ab4" font-size="9.5">${kEuro(v)}</text>`;
+  // x axis: a label every year (Jan), or every few months for short plans
+  const now=new Date();now.setDate(1);
+  const every=len>36?12:len>12?6:3;
+  for(let i=0;i<len;i++){const d=new Date(now.getFullYear(),now.getMonth()+i,1);
+    const lbl=every===12?(d.getMonth()===0?String(d.getFullYear()):''):(i%every===0?`${DE_MONTHS[d.getMonth()]} ${String(d.getFullYear()).slice(2)}`:'');
+    const anchor=X(i)>W-pr-22?'end':X(i)<pl+16?'start':'middle';
+    if(lbl)g+=`<line x1="${X(i)}" x2="${X(i)}" y1="${H-pb}" y2="${H-pb+4}" stroke="#5e5e78"/><text x="${X(i)}" y="${H-6}" text-anchor="${anchor}" fill="#9a9ab4" font-size="9.5">${lbl}</text>`;}
+  const path=d=>d.map((v,i)=>`${i?'L':'M'}${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join('');
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Verlauf der Restschuld">${g}
     ${series.map(s=>`<path d="${path(s.data)}" fill="none" stroke="${s.color}" stroke-width="2.5" stroke-linejoin="round" ${s.dash?'stroke-dasharray="5 4"':''}/>`).join('')}</svg>`;
 }
 
@@ -954,7 +1118,7 @@ function txRow(t){
 }
 function filteredTxs(){
   const q=U.txQuery.trim().toLowerCase();
-  return S.transactions.filter(t=>(!U.txCat||t.category===U.txCat)&&(!q||(t.description+' '+t.purpose+' '+t.category).toLowerCase().includes(q)));
+  return S.transactions.filter(t=>(!U.txCat||t.category===U.txCat)&&(!U.txMonth||t.date.startsWith(U.txMonth))&&(!q||(t.description+' '+t.purpose+' '+t.category).toLowerCase().includes(q)));
 }
 function txListHTML(){
   const list=filteredTxs();
@@ -985,6 +1149,7 @@ function renderTxs(){
       <select class="ifield" style="max-width:42%" data-change="txCat" aria-label="Nach Kategorie filtern">
         <option value="">Alle Kategorien</option>${cats.map(c=>`<option ${U.txCat===c?'selected':''} value="${esc(c)}">${esc(c)}</option>`).join('')}
       </select></div>`:''}
+    ${U.txMonth||U.txCat?`<div class="chips">${U.txMonth?`<button class="chipbtn on" data-act="clearMonth">${monthLabel(U.txMonth)} ✕</button>`:''}${U.txCat?`<button class="chipbtn on" data-act="clearCat">${esc(U.txCat)} ✕</button>`:''}</div>`:''}
     <div id="tx-list">${txListHTML()}</div>`;
 }
 
@@ -1018,20 +1183,28 @@ function renderAnalytics(f){
     <div class="chips" role="group" aria-label="Zeitraum">${[['all','Alles'],['3','3 Mon.'],['6','6 Mon.'],['12','12 Mon.']].map(([v,l])=>`<button class="chipbtn ${U.anaRange===v?'on':''}" data-act="anaRange" data-id="${v}">${l}</button>`).join('')}</div>
     <div class="note" style="margin:-4px 2px 10px">${fmtDate(a.from)} – ${fmtDate(a.to)} · ${a.txCount} Buchungen · ${a.nMonths} ${a.nMonths===1?'Monat':'Monate'}</div>
     <div class="row2">
-      <div class="scard"><div class="scard-lbl">Ø Ausgaben / Monat</div><div class="scard-val num neg">${fmt(a.avgOut)}</div><div class="scard-hint">ohne Kreditraten</div></div>
-      <div class="scard"><div class="scard-lbl">Ø Einnahmen / Monat</div><div class="scard-val num pos">${fmt(a.avgIn)}</div><div class="scard-hint">${a.totalDebtPay?`Tilgung erkannt: Ø ${fmt(a.totalDebtPay/a.nMonths)}`:'&nbsp;'}</div></div>
+      <div class="scard"><div class="scard-lbl">Ø Einnahmen / Monat</div><div class="scard-val num pos">${fmt(a.avgIn)}</div><div class="scard-hint">ohne Umbuchungen & Kredite</div></div>
+      <div class="scard"><div class="scard-lbl">Ø Konsum / Monat</div><div class="scard-val num neg">${fmt(a.avgOut)}</div><div class="scard-hint">ohne Tilgung & Sparen</div></div>
+    </div>
+    <div class="row2">
+      <div class="scard"><div class="scard-lbl">Ø Tilgung / Monat</div><div class="scard-val num warnc">${fmt(a.totalDebtPay/a.nMonths)}</div><div class="scard-hint">Kredite, Karten, Ratenkauf</div></div>
+      <div class="scard"><div class="scard-lbl">Ø Übrig / Monat</div><div class="scard-val num ${a.totalIn-a.totalOut-a.totalDebtPay-a.totalSave>=0?'pos':'neg'}">${fmt((a.totalIn-a.totalOut-a.totalDebtPay-a.totalSave)/a.nMonths)}</div><div class="scard-hint">${a.totalSave?`nach ${fmt(a.totalSave/a.nMonths)} Sparen`:'Einnahmen − alle Ausgaben'}</div></div>
+    </div>
+    ${a.unsortedPayees?`<button class="alert a" style="display:block;width:100%;text-align:left;cursor:pointer" data-act="review">
+      🏷️ <b>${a.unsortedPayees} Empfänger</b> noch nicht eindeutig zugeordnet (${[a.unsortedOut?fmt(a.unsortedOut)+' Ausgaben':'',a.unsortedIn?fmt(a.unsortedIn)+' Einnahmen':''].filter(Boolean).join(', ')}). Solange z. B. Umbuchungen zwischen eigenen Konten nicht markiert sind, stimmen die Durchschnitte nicht.
+      <span style="text-decoration:underline;font-weight:700">Jetzt zuordnen →</span></button>`:''}
+    ${a.excludedTotal?`<div class="note" style="margin:-2px 4px 10px">Nicht mitgezählt: ${fmt(a.excludedTotal)} Umbuchungen zwischen eigenen Konten und Kreditauszahlungen.</div>`:''}
+    <div class="card">
+      <b>Monatsverlauf</b><div class="note" style="margin-bottom:10px">Einnahmen vs. Ausgaben · Monat antippen für Details</div>
+      ${cashflowSVG(a.months)}
     </div>
     ${a.cats.length?`
     <div class="card">
-      <b>Ausgaben nach Kategorie</b>
+      <b>Konsum nach Kategorie</b>
       <div style="display:flex;gap:18px;align-items:center;margin-top:14px">
         <div style="flex-shrink:0">${donutSVG(a.cats,a.totalOut)}</div>
         <div style="flex:1;min-width:0">${a.cats.slice(0,6).map(c=>`<div class="legend-item"><span class="legend-dot" style="background:${catColor(c.name)}"></span><span class="legend-name">${esc(c.name)}</span><span class="num mut">${Math.round(c.total/a.totalOut*100)} %</span></div>`).join('')}</div>
       </div>
-    </div>
-    <div class="card">
-      <b>Monatliche Ausgaben</b><div class="note" style="margin-bottom:10px">${f.totalExp?'Rot = über deinem Fixkosten-Budget':'Konsumausgaben je Monat'}</div>
-      ${barsSVG(a.months,f.totalExp)}
     </div>
     ${insights.length?`<div class="stitle"><span>Erkenntnisse</span></div>${insights.map(i=>`<div class="insight ${i.type}"><span class="insight-ico">${i.ico}</span><div><div class="insight-t">${esc(i.title)}</div><div class="insight-b">${esc(i.body)}</div></div></div>`).join('')}`:''}
     <div class="card">
@@ -1080,11 +1253,11 @@ function renderModal(){
     const v=t||{description:'',amount:'',date:todayISO(),category:'Lebensmittel',type:'ausgabe'};
     m.ttype??=v.type;
     const cats=m.ttype==='einnahme'?INCOME_CATS:EXPENSE_CATS;
-    const allCats=[...new Set([...cats,v.category])].filter(c=>m.ttype==='einnahme'?INCOME_CATS.includes(c)||c===v.category:!INCOME_CATS.includes(c));
+    const allCats=[...new Set([...cats,v.category])];
     inner=`<div class="mtitle">${t?'Buchung bearbeiten':'Neue Buchung'}</div>
       <div class="seg" role="group" aria-label="Art"><button class="${m.ttype==='ausgabe'?'on':''}" data-act="ttype" data-id="ausgabe">Ausgabe</button><button class="${m.ttype==='einnahme'?'on':''}" data-act="ttype" data-id="einnahme">Einnahme</button></div>
       ${field('f-desc','Beschreibung',v.description,`placeholder="z. B. Rewe" maxlength="70" ${t?'':'autofocus'}`)}
-      ${t&&t.purpose?`<div class="note" style="margin:-6px 2px 12px">${esc(t.purpose)}</div>`:''}
+      ${t&&(t.purpose||t.btext||t.bankCat)?`<div class="note" style="margin:-6px 2px 12px">${[t.btext,t.purpose].filter(Boolean).map(esc).join(' · ')}${t.bankCat?`<br>Kategorie der Bank: <b>${esc(t.bankCat)}</b>`:''}</div>`:''}
       <div class="grid2"><div>${field('f-amt','Betrag (€)',v.amount===''?'':fmtNum(v.amount),'inputmode="decimal" placeholder="12,50"')}</div>
         <div>${field('f-date','Datum',v.date,'type="date"')}</div></div>
       <label class="lbl" for="f-cat">Kategorie</label>
@@ -1122,6 +1295,19 @@ function renderModal(){
         <b style="color:var(--text)">3.</b> Schulden anlegen → fertig</div>
       ${field('f-inc','Monatliches Nettoeinkommen (€)','','inputmode="decimal" placeholder="z. B. 2.800" autofocus')}
       <div class="btn-row"><button class="btn-g" data-act="welcomeSample">Beispieldaten</button><button class="btn-p" data-act="welcomeGo">Los geht’s</button></div>`;
+  }else if(m.type==='review'){
+    const groups=reviewGroups();
+    const opts=(type,cur)=>(type==='einnahme'?INCOME_CATS:EXPENSE_CATS).map(c=>`<option ${c===cur?'selected':''} value="${esc(c)}">${esc(c)}</option>`).join('');
+    inner=`<div class="mtitle">Empfänger zuordnen</div>
+      <div class="note" style="margin-bottom:12px">Einmal wählen – gilt für alle bisherigen und künftigen Buchungen dieses Empfängers. Tipp: Überweisungen auf eigene Konten → <b>Umbuchung</b> (zählt weder als Einnahme noch als Ausgabe).</div>
+      ${groups.length?groups.slice(0,40).map(gr=>`<div class="li" style="flex-wrap:wrap">
+        <div class="li-main" style="min-width:55%"><div class="li-t">${esc(gr.name)}</div>
+          <div class="li-s">${gr.n}× · ${gr.type==='ausgabe'?'Ausgabe':'Einnahme'}${gr.sample?' · '+esc(gr.sample.slice(0,40)):''}</div>
+          ${gr.both?'<div class="li-s warnc">↔ Geld fließt in beide Richtungen – eigenes Konto? Dann „Umbuchung“</div>':''}</div>
+        <div class="li-amt num ${gr.type==='ausgabe'?'neg':'pos'}">${fmt(gr.total)}</div>
+        <select class="ifield" style="margin:8px 0 0;padding:9px 12px;font-size:14px" data-change="reviewCat" data-id="${esc(gr.key)}" aria-label="Kategorie für ${esc(gr.name)}">${opts(gr.type,gr.cat)}</select>
+      </div>`).join(''):'<div class="empty"><div class="empty-ico">🎉</div><div class="empty-t">Alles zugeordnet</div></div>'}
+      <button class="btn-p" style="margin-top:8px" data-act="closeRender">Fertig</button>`;
   }else if(m.type==='confirm'){
     inner=`<div class="mtitle">${esc(m.title)}</div><div class="note" style="font-size:14px;margin-bottom:18px">${esc(m.text)}</div>
       <div class="btn-row"><button class="btn-g" data-act="close">Abbrechen</button><button class="btn-d" style="background:var(--red);color:#fff;border:none" data-act="confirmOk">${esc(m.ok)}</button></div>`;
@@ -1131,6 +1317,30 @@ function renderModal(){
 let confirmFn=null;
 function confirmDialog(title,text,ok,fn){confirmFn=fn;openModal({type:'confirm',title,text,ok});}
 function val(id){const el=$(id);return el?el.value.trim():'';}
+
+/** Remembers a category for a payee and applies it to all their bookings. Own transfers and
+ *  person-to-person transfers are learned for both directions. Returns how many bookings changed. */
+function learnRule(payee,type,cat){
+  const k=payeeKey(payee);let n=0;
+  const both=cat==='Umbuchung';
+  const types=both?['einnahme','ausgabe']:[type];
+  for(const ty of types)S.rules[ruleKey(payee,ty==='einnahme')]=cat;
+  for(const x of S.transactions)if(types.includes(x.type)&&payeeKey(x.description)===k&&!x.catManual&&x.category!==cat){x.category=cat;n++;}
+  return n;
+}
+function reviewGroups(){
+  const g={},dirs={};
+  for(const t of S.transactions){const k=payeeKey(t.description);(dirs[k]??=new Set()).add(t.type);}
+  for(const t of S.transactions){
+    if(!REVIEW_CATS.has(t.category)||t.catManual)continue;
+    const k=t.type+'|'+payeeKey(t.description);
+    (g[k]??={key:k,type:t.type,name:t.description,cat:t.category,n:0,total:0,last:t.date,sample:t.purpose});
+    g[k].n++;g[k].total+=t.amount;
+  }
+  const out=Object.values(g);
+  for(const x of out)x.both=dirs[x.key.split('|')[1]].size>1&&looksLikePerson(x.name);
+  return out.sort((a,b)=>b.both-a.both||b.total-a.total);
+}
 
 // ── Actions ──────────────────────────────────────────────────────────────────
 function loadSample(){
@@ -1149,6 +1359,7 @@ const ACT={
   tab:id=>{S.tab=id;save();render();window.scrollTo(0,0);},
   settings:()=>openModal({type:'settings'}),
   close:()=>closeModal(),
+  closeRender:()=>{closeModal();render();},
   overlay:(id,el,e)=>{if(e.target===el)closeModal();},
   undo:()=>{if(toastUndo){toastUndo();toastUndo=null;$('toast').innerHTML='';}},
   sample:()=>{loadSample();render();toast('Beispieldaten geladen');},
@@ -1232,12 +1443,10 @@ const ACT={
     if(m.id){
       const t=S.transactions.find(x=>x.id===m.id);
       const learn=$('f-rule')?.checked&&cat!==t.category;
+      const changed=cat!==t.category;
       Object.assign(t,{description:desc,amount:round2(amt),date,category:cat,type:m.ttype});
-      let n=0;
-      if(learn){
-        const k=payeeKey(t.description);S.rules[ruleKey(t.description,t.type==='einnahme')]=cat;
-        for(const x of S.transactions)if(x!==t&&x.type===t.type&&payeeKey(x.description)===k&&x.category!==cat){x.category=cat;n++;}
-      }
+      if(changed&&!learn)t.catManual=true;
+      const n=learn?learnRule(t.description,t.type,cat):0;
       sortTx(S.transactions);save();closeModal();render();
       toast(n?`Gespeichert · ${n} weitere angepasst`:'Gespeichert');
     }else{
@@ -1252,6 +1461,10 @@ const ACT={
   },
   moreTx:()=>{U.txLimit+=1000;$('tx-list').innerHTML=txListHTML();},
   showCat:id=>{U.txCat=id;U.txQuery='';S.tab='transactions';render();window.scrollTo(0,0);},
+  showMonth:id=>{U.txMonth=id;U.txCat='';U.txQuery='';S.tab='transactions';render();window.scrollTo(0,0);},
+  clearMonth:()=>{U.txMonth='';render();},
+  clearCat:()=>{U.txCat='';render();},
+  review:()=>openModal({type:'review'}),
   importCsv:()=>$('file-csv').click(),
   exportCsv:()=>{
     if(!S.transactions.length){toast('Keine Buchungen vorhanden','err');return;}
@@ -1285,6 +1498,12 @@ document.addEventListener('change',e=>{
   if(k==='income'){const v=parseNum(el.value);if(v>=0){S.income=round2(v);save();}render();}
   else if(k==='expAmount'){const v=parseNum(el.value);if(v>=0){S.expenses=S.expenses.map(x=>x.id===el.dataset.id?{...x,amount:round2(v)}:x);save();}else toast('Ungültiger Betrag','err');render();}
   else if(k==='txCat'){U.txCat=el.value;U.txLimit=400;$('tx-list').innerHTML=txListHTML();}
+  else if(k==='reviewCat'){
+    const [type,pk]=el.dataset.id.split('|');
+    const t=S.transactions.find(x=>x.type===type&&payeeKey(x.description)===pk);
+    if(t){const n=learnRule(t.description,type,el.value);save();toast(`${n} Buchungen → ${el.value}`);
+      const sc=document.querySelector('#modal .mbox').scrollTop;renderModal();document.querySelector('#modal .mbox').scrollTop=sc;}
+  }
 });
 document.addEventListener('input',e=>{
   const el=e.target;const k=el.dataset.input;if(!k)return;
@@ -1328,6 +1547,7 @@ $('file-backup').addEventListener('change',async e=>{
 
 // ── Boot ─────────────────────────────────────────────────────────────────────
 load();
+if(S.transactions.length&&S.catVersion<CAT_VERSION){recategorizeAll();save();}
 if(needsPin())showPin('unlock');
 else if(!pinDisabled()&&!S.onboarded)showPin('setup');
 else unlockApp();
